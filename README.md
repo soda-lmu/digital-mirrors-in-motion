@@ -2,6 +2,8 @@
 
 This repository provides the data of the analysis for the paper [LINK TO PAPER]() published in [LINK TO JOURNAL]().
 
+Additionally, it also contains the 150 prototypes computed from the clusters in the paper for replicability purposes. These are packaged as 150 .png-Files in the `Prototypes.zip' archive.
+
 The data provided is already filtered and labelled as described in the 'Data and Methods' section 3.1 of the paper.
 
 The data set is provided as a .csv (separator `;`) which contains information on the coordinates of the keypoints extracted by [OpenPose](https://github.com/CMU-Perceptual-Computing-Lab/openpose).
