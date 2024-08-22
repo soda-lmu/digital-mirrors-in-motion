@@ -2,7 +2,7 @@
 
 This repository provides the data of the analysis for the paper [LINK TO PAPER]() published in [LINK TO JOURNAL]().
 
-Additionally, it also contains the 150 prototypes computed from the clusters in the paper for replicability purposes. These are packaged as 150 .png-Files in the `Prototypes.zip' archive.
+Additionally, it also contains the 150 prototypes computed from the clusters in the paper for extra transparancy of the analysis conducted in the paper. These are packaged as 150 .png-Files in the `Prototypes.zip' archive.
 
 The data provided is already filtered and labelled as described in the 'Data and Methods' section 3.1 of the paper.
 
