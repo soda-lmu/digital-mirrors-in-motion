@@ -1,6 +1,6 @@
 # Unveiling Digital Mirrors
 
-This repository provides the data of the analysis for the paper [LINK TO PAPER]() published in [LINK TO JOURNAL]().
+This repository provides the data of the analysis for the paper [Unveiling Digital Mirrors: Decoding Gendered Body Poses in Instagram Imagery](https://doi.org/10.1016/j.chb.2024.108464) published in [Computers in Human Behavior](https://www.sciencedirect.com/journal/computers-in-human-behavior).
 
 Additionally, it also contains the 150 prototypes computed from the clusters in the paper for extra transparancy of the analysis conducted in the paper. These are packaged as 150 .png-Files in the `Prototypes.zip' archive.
 
