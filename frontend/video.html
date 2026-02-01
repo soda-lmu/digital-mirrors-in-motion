@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Analysis - Unveiling Digital Mirrors</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Global Navigation -->
+        <nav class="global-nav">
+            <a href="index.html" class="nav-home">🪞 Unveiling Digital Mirrors</a>
+            <div class="nav-tools">
+                <a href="image.html" class="nav-tool">📷 Image</a>
+                <a href="video.html" class="nav-tool active">🎬 Video</a>
+                <a href="patterns.html" class="nav-tool">📊 Database</a>
+            </div>
+        </nav>
+
+        <header class="page-header">
+            <h1>🎬 Video Pose Analysis</h1>
+            <p class="page-subtitle">Extract poses frame-by-frame and predict overall gender expression</p>
+        </header>
+
+        <div class="video-layout">
+            <!-- Left: Video & Controls -->
+            <div class="video-panel">
+                <!-- Upload Controls (always visible at top) -->
+                <div class="upload-area">
+                    <button id="uploadBtn" class="btn btn-primary btn-large">🎬 Upload Video</button>
+                    <button id="clearBtn" class="btn" style="display: none;">🗑️ Clear</button>
+                    <input type="file" id="videoInput" accept="video/mp4,video/webm,video/quicktime,video/x-msvideo" hidden>
+                </div>
+
+                <!-- Upload Placeholder (shown initially) -->
+                <div id="uploadPlaceholder" class="upload-placeholder">
+                    <div class="placeholder-content">
+                        <span class="placeholder-icon">🎬</span>
+                        <p>Upload a video to analyze poses</p>
+                        <p class="placeholder-hint">MP4, WebM, MOV • Max 30 seconds • Single person visible</p>
+                    </div>
+                </div>
+
+                <!-- Processing Section (shown during analysis) -->
+                <div id="processingSection" class="processing-section" style="display: none;">
+                    <div class="processing-preview">
+                        <canvas id="processingCanvas" width="400" height="300"></canvas>
+                    </div>
+                    <div class="processing-info">
+                        <div class="processing-status">
+                            <span id="processingText">Initializing...</span>
+                        </div>
+                        <div class="processing-progress">
+                            <div class="progress-bar-large">
+                                <div id="progressFill" class="progress-fill-large"></div>
+                            </div>
+                            <span id="progressText">0%</span>
+                        </div>
+                        <button id="cancelBtn" class="btn btn-small">Cancel</button>
+                    </div>
+                </div>
+
+                <!-- Results Section (shown after analysis) -->
+                <div id="resultsSection" class="results-section" style="display: none;">
+                    <div class="video-player">
+                        <canvas id="playbackCanvas" width="500" height="400"></canvas>
+                        <video id="videoElement" hidden muted playsinline></video>
+                    </div>
+                    
+                    <div class="playback-controls">
+                        <div class="playback-progress">
+                            <div class="progress-bar" id="playbackProgressBar">
+                                <div id="playbackFill" class="progress-fill"></div>
+                            </div>
+                            <span id="timeDisplay">0:00 / 0:00</span>
+                        </div>
+                        <div class="playback-buttons">
+                            <button id="playBtn" class="btn btn-primary">▶ Play with Skeleton</button>
+                        </div>
+                    </div>
+
+                    <!-- Extracted Poses Gallery -->
+                    <div class="poses-gallery">
+                        <div class="gallery-header">
+                            <h3>🎯 Extracted Poses</h3>
+                            <div class="gallery-nav">
+                                <button id="prevPoseBtn" class="btn btn-small">←</button>
+                                <span id="poseCounter">0 / 0</span>
+                                <button id="nextPoseBtn" class="btn btn-small">→</button>
+                            </div>
+                            <span class="nav-hint">Use arrow keys to navigate</span>
+                        </div>
+                        <div id="posesContainer" class="poses-container">
+                            <!-- Poses will be rendered here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right: Analysis Results -->
+            <div class="analysis-panel">
+                <!-- Gender Prediction (video only) -->
+                <div id="predictionCard" class="card prediction-card" style="display: none;">
+                    <h2>🔮 Pose-Based Prediction</h2>
+                    <div id="predictionContent" class="prediction-content">
+                        <!-- Prediction will appear here -->
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>🎯 Current Pose</h2>
+                    <div id="patternContent" class="pattern-content">
+                        <p class="placeholder-text">Upload a video to begin analysis</p>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>🎭 Matching Categories</h2>
+                    <div id="matchingClusters" class="matching-clusters">
+                        <p class="placeholder-text">Pose matches will appear here</p>
+                    </div>
+                </div>
+
+                <!-- Video Summary -->
+                <div id="summaryCard" class="card" style="display: none;">
+                    <h2>📊 Analysis Summary</h2>
+                    <div id="summaryContent" class="summary-content">
+                        <!-- Summary will appear here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="video.js"></script>
+</body>
+</html>

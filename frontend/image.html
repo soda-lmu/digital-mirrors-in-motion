@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Analysis - Unveiling Digital Mirrors</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Global Navigation -->
+        <nav class="global-nav">
+            <a href="index.html" class="nav-home">🪞 Unveiling Digital Mirrors</a>
+            <div class="nav-tools">
+                <a href="image.html" class="nav-tool active">📷 Image</a>
+                <a href="video.html" class="nav-tool">🎬 Video</a>
+                <a href="patterns.html" class="nav-tool">📊 Database</a>
+            </div>
+        </nav>
+
+        <header class="page-header">
+            <h1>📷 Image Pose Analysis</h1>
+            <p class="page-subtitle">Upload an image to detect poses and analyze gender patterns</p>
+        </header>
+
+        <div class="image-layout">
+            <!-- Left: Upload & Preview -->
+            <div class="preview-panel">
+                <div class="upload-area">
+                    <button id="uploadBtn" class="btn btn-primary btn-large">📷 Upload Image</button>
+                    <button id="clearBtn" class="btn" style="display: none;">🗑️ Clear</button>
+                    <input type="file" id="imageInput" accept="image/*" hidden>
+                </div>
+
+                <div id="uploadPlaceholder" class="upload-placeholder">
+                    <div class="placeholder-content">
+                        <span class="placeholder-icon">📷</span>
+                        <p>Upload an image to detect poses</p>
+                        <p class="placeholder-hint">Supports JPG, PNG, WebP</p>
+                    </div>
+                </div>
+
+                <div id="previewArea" class="preview-area" style="display: none;">
+                    <canvas id="previewCanvas" width="500" height="600"></canvas>
+                </div>
+
+                <div id="statusBar" class="status-bar">
+                    <span>Ready to analyze</span>
+                </div>
+            </div>
+
+            <!-- Right: Analysis Results -->
+            <div class="analysis-panel">
+                <div class="card">
+                    <h2>🎯 Pose Pattern</h2>
+                    <div id="patternContent" class="pattern-content">
+                        <p class="placeholder-text">Upload an image to see pattern analysis</p>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>🎭 Matching Pose Categories</h2>
+                    <p class="card-subtitle">Closest matches from the pose dataset</p>
+                    <div id="matchingClusters" class="matching-clusters">
+                        <p class="placeholder-text">Upload an image to find matching poses</p>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>📚 Media Literacy Analysis</h2>
+                    <div id="literacyOutput" class="literacy-output">
+                        <p class="placeholder-text">Upload an image to see analysis...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="image.js"></script>
+</body>
+</html>

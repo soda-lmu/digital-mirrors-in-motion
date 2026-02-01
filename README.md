@@ -1,23 +1,49 @@
 # Unveiling Digital Mirrors
 
-This repository provides the data of the analysis for the paper [Unveiling Digital Mirrors: Decoding Gendered Body Poses in Instagram Imagery](https://doi.org/10.1016/j.chb.2024.108464) published in [Computers in Human Behavior](https://www.sciencedirect.com/journal/computers-in-human-behavior).
+Interactive tool for analyzing body pose patterns and gender classification from images and videos.
 
-Additionally, it also contains the 150 prototypes computed from the clusters in the paper for extra transparancy of the analysis conducted in the paper. These are packaged as 150 .png-Files in the `Prototypes.zip' archive.
+Based on research from the paper: [Unveiling Digital Mirrors: Decoding Gendered Body Poses in Instagram Imagery](https://doi.org/10.1016/j.chb.2024.108464) published in [Computers in Human Behavior](https://www.sciencedirect.com/journal/computers-in-human-behavior).
 
-The data provided is already filtered and labelled as described in the 'Data and Methods' section 3.1 of the paper.
+## 📁 Project Structure
 
-The data set is provided as a .csv (separator `;`) which contains information on the coordinates of the keypoints extracted by [OpenPose](https://github.com/CMU-Perceptual-Computing-Lab/openpose).
+```
+├── tool/                    # Main application
+│   ├── frontend/           # Web interface (HTML/CSS/JavaScript)
+│   ├── src/                # Python backend & data processing
+│   └── serve.py            # Development server
+├── docs/                   # Documentation
+│   ├── TOOL_DOCUMENTATION.md   # Complete tool guide
+│   └── PAPER_DATA.md           # Research data info
+└── .gitignore             # Git configuration
+```
 
-As described in the paper, the data contains 15167 cases which are distributed across gender as follows:
+## 🚀 Quick Start
 
-| Gender | Frequency | Relative frequency | 
-| --- | --- | --- |
-| Female | 7957 | 0.5246 |
-| Male | 6597 | 0.4350 |
-| Non-Binary | 613 | 0.0404 |
+```bash
+# Install dependencies
+pip install -r requirements.txt
 
-The data contains 35 colums of which 34 contain the information on keypoints. The remaining column contains the gender the image has been annotated with.
+# Run the development server
+cd tool
+python serve.py
+```
 
-Keypoints on the horizontal axis are prefixed with `x_` and keypoints on the vertical axis are prefixed with `y_`. The names of the keypoints are in accordance with the [specification of the OpenPose API](https://cmu-perceptual-computing-lab.github.io/openpose/web/html/doc/md_doc_02_output.html).
+Then open `http://localhost:8000` in your browser.
 
-For example: `x_nose` and `y_nose` contain the x- and y-coordinate of the pixel at which the nose has been detected. Note that at this point, the coordinates have not yet been normalized, but represent actual values of pixels.
+## 📖 Documentation
+
+- **[TOOL_DOCUMENTATION.md](docs/TOOL_DOCUMENTATION.md)** - Complete guide on how to use the tool and understand the analysis logic
+- **[PAPER_DATA.md](docs/PAPER_DATA.md)** - Information about the research dataset and original analysis
+
+## 🎯 Features
+
+- **Image Analysis**: Upload images to analyze pose patterns and gender classification
+- **Video Analysis**: Upload videos to analyze frame-by-frame pose patterns with gender distribution
+- **Interactive Visualization**: View pose skeletons and match patterns
+- **Gender Classification**: Based on 150 pose cluster prototypes from research
+
+## 📊 How It Works
+
+The tool uses K-means clustering on normalized body poses to classify movement patterns as masculine, feminine, or non-binary. Each frame or image is matched against the closest prototype cluster, with gender percentages calculated from the prototype distributions.
+
+For detailed technical explanation, see [TOOL_DOCUMENTATION.md](docs/TOOL_DOCUMENTATION.md).
