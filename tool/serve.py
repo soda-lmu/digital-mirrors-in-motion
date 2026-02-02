@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 
 PORT = 8000
-DIRECTORY = Path(__file__).parent / "frontend"
+DIRECTORY = Path(__file__).parent.parent / "frontend"
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):

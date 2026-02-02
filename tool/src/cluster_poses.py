@@ -1,6 +1,8 @@
 """
 Advanced pose clustering with proper normalization and hierarchical refinement.
 Creates meaningful pose categories with prototype (centroid) and examples.
+
+FEATURES ARE MIRROR-INVARIANT: A pose and its mirror are treated as the same.
 """
 
 import pandas as pd
@@ -50,83 +52,219 @@ def normalize_pose(row):
     
     return normalized
 
-def extract_pose_features(norm_pose):
+
+def canonicalize_pose(norm_pose):
     """
-    Extract meaningful features from a normalized pose.
-    Focus on angles and relative positions that define pose character.
+    Make pose mirror-invariant by flipping to a canonical orientation.
+    We flip so that the "active" side (more extended arm/leg) is always on the right.
+    This ensures mirrored poses cluster together.
     """
     if norm_pose is None:
         return None
     
-    def get_angle(p1, p2, p3):
-        """Angle at p2 formed by p1-p2-p3."""
-        v1 = np.array([p1['x'] - p2['x'], p1['y'] - p2['y']])
-        v2 = np.array([p3['x'] - p2['x'], p3['y'] - p2['y']])
-        mag1, mag2 = np.linalg.norm(v1), np.linalg.norm(v2)
-        if mag1 == 0 or mag2 == 0:
-            return 180.0
-        cos_angle = np.clip(np.dot(v1, v2) / (mag1 * mag2), -1, 1)
-        return np.degrees(np.arccos(cos_angle))
+    # Calculate which side has more "activity" (further from body center)
+    left_arm_extent = abs(norm_pose['lwrist']['x']) + abs(norm_pose['lwrist']['y'] - norm_pose['lshoulder']['y'])
+    right_arm_extent = abs(norm_pose['rwrist']['x']) + abs(norm_pose['rwrist']['y'] - norm_pose['rshoulder']['y'])
     
-    def get_vector_angle(p1, p2):
-        """Angle of vector from p1 to p2 relative to vertical."""
-        dx = p2['x'] - p1['x']
-        dy = p2['y'] - p1['y']
-        return np.degrees(np.arctan2(dx, -dy))  # -dy because Y increases downward
+    left_leg_extent = abs(norm_pose['lankle']['x']) + abs(norm_pose['lankle']['y'])
+    right_leg_extent = abs(norm_pose['rankle']['x']) + abs(norm_pose['rankle']['y'])
+    
+    left_total = left_arm_extent + left_leg_extent
+    right_total = right_arm_extent + right_leg_extent
+    
+    # If left side is more active, flip the pose horizontally
+    if left_total > right_total:
+        flipped = {}
+        swap_pairs = [
+            ('lshoulder', 'rshoulder'), ('lelbow', 'relbow'), ('lwrist', 'rwrist'),
+            ('lhip', 'rhip'), ('lknee', 'rknee'), ('lankle', 'rankle')
+        ]
+        swap_dict = {}
+        for l, r in swap_pairs:
+            swap_dict[l] = r
+            swap_dict[r] = l
+        
+        for joint, pos in norm_pose.items():
+            new_joint = swap_dict.get(joint, joint)
+            # Mirror the x-coordinate and swap the joint names
+            flipped[new_joint] = {'x': -pos['x'], 'y': pos['y']}
+        
+        return flipped
+    
+    return norm_pose.copy()
+
+
+def get_angle(p1, p2, p3):
+    """Angle at p2 formed by p1-p2-p3 in degrees."""
+    v1 = np.array([p1['x'] - p2['x'], p1['y'] - p2['y']])
+    v2 = np.array([p3['x'] - p2['x'], p3['y'] - p2['y']])
+    mag1, mag2 = np.linalg.norm(v1), np.linalg.norm(v2)
+    if mag1 == 0 or mag2 == 0:
+        return 180.0
+    cos_angle = np.clip(np.dot(v1, v2) / (mag1 * mag2), -1, 1)
+    return np.degrees(np.arccos(cos_angle))
+
+
+def get_angle_from_vertical(p1, p2):
+    """Angle of line p1->p2 from vertical (0=straight up, positive=tilted right)."""
+    dx = p2['x'] - p1['x']
+    dy = p2['y'] - p1['y']
+    if dy == 0:
+        return 90.0 if dx > 0 else -90.0
+    return np.degrees(np.arctan2(dx, dy))
+
+
+def extract_pose_features(norm_pose):
+    """
+    Extract meaningful, mirror-invariant features from a normalized pose.
+    
+    Features capture recognizable pose characteristics:
+    - Head tilt (absolute - direction doesn't matter for clustering)
+    - Body lean
+    - Arm positions (hands on hips, arms raised, crossed, etc.)
+    - Leg positions (crossed, wide stance, bent knees, etc.)
+    - Contrapposto (hip/shoulder opposition)
+    """
+    if norm_pose is None:
+        return None
+    
+    # Canonicalize to handle mirrors
+    pose = canonicalize_pose(norm_pose)
     
     features = {}
     
-    # 1. Head tilt (nose relative to neck)
-    features['head_tilt'] = get_vector_angle(norm_pose['neck'], norm_pose['nose'])
+    # === HEAD & BODY TILT ===
+    # Head tilt (absolute value - we don't care which direction)
+    head_tilt = get_angle_from_vertical(pose['neck'], pose['nose'])
+    features['head_tilt_abs'] = abs(head_tilt)
     
-    # 2. Shoulder line angle
-    features['shoulder_angle'] = get_vector_angle(norm_pose['lshoulder'], norm_pose['rshoulder'])
+    # Shoulder tilt (absolute)
+    shoulder_dy = pose['rshoulder']['y'] - pose['lshoulder']['y']
+    shoulder_dx = pose['rshoulder']['x'] - pose['lshoulder']['x']
+    features['shoulder_tilt_abs'] = abs(np.degrees(np.arctan2(shoulder_dy, shoulder_dx))) if shoulder_dx != 0 else 0
     
-    # 3. Hip line angle
-    features['hip_angle'] = get_vector_angle(norm_pose['lhip'], norm_pose['rhip'])
+    # Hip tilt (absolute)
+    hip_dy = pose['rhip']['y'] - pose['lhip']['y']
+    hip_dx = pose['rhip']['x'] - pose['lhip']['x']
+    features['hip_tilt_abs'] = abs(np.degrees(np.arctan2(hip_dy, hip_dx))) if hip_dx != 0 else 0
     
-    # 4. Torso twist (difference between shoulder and hip angles)
-    features['torso_twist'] = features['shoulder_angle'] - features['hip_angle']
+    # Body lean (torso angle from vertical)
+    body_lean = get_angle_from_vertical(pose['midhip'], pose['neck'])
+    features['body_lean_abs'] = abs(body_lean)
     
-    # 5. Left arm bend
-    features['left_elbow_angle'] = get_angle(norm_pose['lshoulder'], norm_pose['lelbow'], norm_pose['lwrist'])
+    # Contrapposto (shoulder vs hip tilt opposition)
+    features['contrapposto'] = abs(features['shoulder_tilt_abs'] - features['hip_tilt_abs'])
     
-    # 6. Right arm bend
-    features['right_elbow_angle'] = get_angle(norm_pose['rshoulder'], norm_pose['relbow'], norm_pose['rwrist'])
+    # === ARM POSITIONS ===
+    # Arm bend angles (elbow angles)
+    left_elbow_angle = get_angle(pose['lshoulder'], pose['lelbow'], pose['lwrist'])
+    right_elbow_angle = get_angle(pose['rshoulder'], pose['relbow'], pose['rwrist'])
+    features['avg_elbow_angle'] = (left_elbow_angle + right_elbow_angle) / 2
+    features['elbow_angle_diff'] = abs(left_elbow_angle - right_elbow_angle)  # Asymmetry
     
-    # 7. Left arm raise (shoulder-elbow angle from vertical)
-    features['left_arm_raise'] = get_vector_angle(norm_pose['lshoulder'], norm_pose['lelbow'])
+    # Arms raised (how high are hands relative to shoulders)
+    left_arm_raised = pose['lshoulder']['y'] - pose['lwrist']['y']  # Positive = raised
+    right_arm_raised = pose['rshoulder']['y'] - pose['rwrist']['y']
+    features['max_arm_raised'] = max(left_arm_raised, right_arm_raised)
+    features['min_arm_raised'] = min(left_arm_raised, right_arm_raised)
     
-    # 8. Right arm raise
-    features['right_arm_raise'] = get_vector_angle(norm_pose['rshoulder'], norm_pose['relbow'])
+    # Hands on hips detection (wrist near hip)
+    left_hand_to_hip = np.sqrt((pose['lwrist']['x'] - pose['lhip']['x'])**2 + 
+                                (pose['lwrist']['y'] - pose['lhip']['y'])**2)
+    right_hand_to_hip = np.sqrt((pose['rwrist']['x'] - pose['rhip']['x'])**2 + 
+                                 (pose['rwrist']['y'] - pose['rhip']['y'])**2)
+    features['min_hand_to_hip'] = min(left_hand_to_hip, right_hand_to_hip)
+    features['hands_on_hips_score'] = 1.0 / (1.0 + features['min_hand_to_hip'])  # Higher = closer to hips
     
-    # 9. Left leg bend
-    features['left_knee_angle'] = get_angle(norm_pose['lhip'], norm_pose['lknee'], norm_pose['lankle'])
+    # Arms crossed detection (wrists near opposite shoulders)
+    left_to_right = np.sqrt((pose['lwrist']['x'] - pose['rshoulder']['x'])**2 + 
+                            (pose['lwrist']['y'] - pose['rshoulder']['y'])**2)
+    right_to_left = np.sqrt((pose['rwrist']['x'] - pose['lshoulder']['x'])**2 + 
+                            (pose['rwrist']['y'] - pose['lshoulder']['y'])**2)
+    features['arms_crossed_score'] = 1.0 / (1.0 + (left_to_right + right_to_left) / 2)
     
-    # 10. Right leg bend
-    features['right_knee_angle'] = get_angle(norm_pose['rhip'], norm_pose['rknee'], norm_pose['rankle'])
+    # Arm spread (how far apart are hands horizontally)
+    features['arm_spread'] = abs(pose['lwrist']['x'] - pose['rwrist']['x'])
     
-    # 11. Left leg spread (hip-knee angle from vertical)
-    features['left_leg_spread'] = get_vector_angle(norm_pose['lhip'], norm_pose['lknee'])
+    # === LEG POSITIONS ===
+    # Leg bend angles (knee angles)
+    left_knee_angle = get_angle(pose['lhip'], pose['lknee'], pose['lankle'])
+    right_knee_angle = get_angle(pose['rhip'], pose['rknee'], pose['rankle'])
+    features['avg_knee_angle'] = (left_knee_angle + right_knee_angle) / 2
+    features['knee_angle_diff'] = abs(left_knee_angle - right_knee_angle)  # Asymmetry
     
-    # 12. Right leg spread
-    features['right_leg_spread'] = get_vector_angle(norm_pose['rhip'], norm_pose['rknee'])
+    # Stance width (how far apart are feet)
+    features['stance_width'] = abs(pose['lankle']['x'] - pose['rankle']['x'])
     
-    # 13. Stance width (normalized)
-    features['stance_width'] = abs(norm_pose['lankle']['x'] - norm_pose['rankle']['x'])
+    # Legs crossed detection (ankles/knees crossing over midline)
+    left_ankle_x = pose['lankle']['x']
+    right_ankle_x = pose['rankle']['x']
+    # If left ankle is to the right of right ankle, legs are crossed
+    features['legs_crossed'] = 1.0 if left_ankle_x > right_ankle_x else 0.0
     
-    # 14. Weight shift (center of feet relative to hips)
-    ankle_center_x = (norm_pose['lankle']['x'] + norm_pose['rankle']['x']) / 2
-    features['weight_shift'] = ankle_center_x
+    # One leg forward (depth difference approximated by y difference of ankles)
+    features['leg_forward_diff'] = abs(pose['lankle']['y'] - pose['rankle']['y'])
     
-    # 15. Contrapposto score (hip vs shoulder angle difference)
-    features['contrapposto'] = abs(features['shoulder_angle'] - features['hip_angle'])
+    # Weight shift (is body weight on one leg? - hip center vs ankle center)
+    hip_center_x = (pose['lhip']['x'] + pose['rhip']['x']) / 2
+    ankle_center_x = (pose['lankle']['x'] + pose['rankle']['x']) / 2
+    features['weight_shift'] = abs(hip_center_x - ankle_center_x)
     
-    # 16. Arm symmetry (difference in arm angles)
-    features['arm_asymmetry'] = abs(features['left_arm_raise'] - features['right_arm_raise'])
+    # === MASCULINE-ASSOCIATED FEATURES ===
     
-    # 17. Leg symmetry
-    features['leg_asymmetry'] = abs(features['left_leg_spread'] - features['right_leg_spread'])
+    # Hands in pockets detection (wrists low, near thighs/below hips)
+    # Wrist y-position relative to hip (positive = below hip)
+    left_wrist_below_hip = pose['lwrist']['y'] - pose['lhip']['y']
+    right_wrist_below_hip = pose['rwrist']['y'] - pose['rhip']['y']
+    features['hands_low_score'] = max(0, left_wrist_below_hip) + max(0, right_wrist_below_hip)
+    
+    # Hands near body center (in pockets = close to hips horizontally but low)
+    left_hand_near_center = abs(pose['lwrist']['x'] - pose['lhip']['x'])
+    right_hand_near_center = abs(pose['rwrist']['x'] - pose['rhip']['x'])
+    # Hands in pockets: low AND close to body horizontally
+    in_pocket_left = max(0, left_wrist_below_hip) * (1.0 / (1.0 + left_hand_near_center))
+    in_pocket_right = max(0, right_wrist_below_hip) * (1.0 / (1.0 + right_hand_near_center))
+    features['hands_in_pockets_score'] = in_pocket_left + in_pocket_right
+    
+    # Hands behind back (wrists behind body midline - x close to 0 or negative when hands behind)
+    # Also check wrists are near each other (behind back = wrists close together)
+    wrist_dist = np.sqrt((pose['lwrist']['x'] - pose['rwrist']['x'])**2 + 
+                         (pose['lwrist']['y'] - pose['rwrist']['y'])**2)
+    wrists_close = 1.0 / (1.0 + wrist_dist)
+    wrists_center_x = (pose['lwrist']['x'] + pose['rwrist']['x']) / 2
+    wrists_behind = abs(wrists_center_x) < 0.3  # Close to body center horizontally
+    wrists_mid_height = abs(pose['lwrist']['y'] - pose['midhip']['y']) < 0.5  # Around waist height
+    features['hands_behind_back_score'] = wrists_close * (1.0 if wrists_behind and wrists_mid_height else 0.3)
+    
+    # Arms hanging relaxed (wrists low, arms relatively straight, spread apart)
+    arms_straight = features['avg_elbow_angle'] > 150  # Elbow angle > 150 = relatively straight
+    arms_down = features['max_arm_raised'] < 0  # Negative = hands below shoulders
+    features['arms_relaxed_score'] = (1.0 if arms_straight else 0.5) * (1.0 if arms_down else 0.3)
+    
+    # Squared/level shoulders (low shoulder tilt)
+    features['shoulders_squared'] = 1.0 / (1.0 + features['shoulder_tilt_abs'])
+    
+    # Power pose score (wide stance + squared shoulders + upright + symmetric)
+    wide_stance = 1.0 if features['stance_width'] > 0.5 else features['stance_width'] * 2
+    upright = 1.0 / (1.0 + features['body_lean_abs'] + features['head_tilt_abs'])
+    symmetric = 1.0 / (1.0 + features['elbow_angle_diff'] + features['knee_angle_diff'])
+    features['power_pose_score'] = wide_stance * features['shoulders_squared'] * upright * symmetric
+    
+    # Overall symmetry (lower = more symmetric, often masculine)
+    features['overall_symmetry'] = 1.0 / (1.0 + features['elbow_angle_diff'] + features['knee_angle_diff'] + 
+                                           features['shoulder_tilt_abs'] + features['hip_tilt_abs'])
+    
+    # Straight posture score (low tilts, low lean)
+    features['straight_posture'] = 1.0 / (1.0 + features['head_tilt_abs'] + features['body_lean_abs'] + 
+                                          features['shoulder_tilt_abs'] + features['hip_tilt_abs'])
+    
+    # === OVERALL POSE CHARACTERISTICS ===
+    # Compactness (how "closed" is the pose - arms and legs close to body)
+    features['compactness'] = 1.0 / (1.0 + features['arm_spread'] + features['stance_width'])
+    
+    # Asymmetry score (how asymmetric is the pose overall)
+    features['asymmetry'] = (features['elbow_angle_diff'] + features['knee_angle_diff'] + 
+                             features['leg_forward_diff']) / 3
     
     return features
 
@@ -256,9 +394,9 @@ def analyze_clusters(labels, normalized_poses, features_list, valid_indices, df,
             examples.append(pose)
         
         # Determine character (based on gender distribution)
-        if male_pct > 60:
+        if male_pct > 70:
             character = 'masculine'
-        elif female_pct > 60:
+        elif female_pct > 70:
             character = 'feminine'
         else:
             character = 'neutral'
@@ -273,15 +411,23 @@ def analyze_clusters(labels, normalized_poses, features_list, valid_indices, df,
             'prototype': prototype,
             'examples': examples,
             'metrics': {
-                'headTilt': round(avg_features.get('head_tilt', 0), 1),
-                'shoulderAngle': round(avg_features.get('shoulder_angle', 0), 1),
-                'hipAngle': round(avg_features.get('hip_angle', 0), 1),
+                'headTilt': round(avg_features.get('head_tilt_abs', 0), 1),
+                'bodyLean': round(avg_features.get('body_lean_abs', 0), 1),
                 'contrapposto': round(avg_features.get('contrapposto', 0), 1),
                 'stanceWidth': round(avg_features.get('stance_width', 0), 2),
-                'leftArmRaise': round(avg_features.get('left_arm_raise', 0), 1),
-                'rightArmRaise': round(avg_features.get('right_arm_raise', 0), 1),
-                'leftKneeAngle': round(avg_features.get('left_knee_angle', 180), 1),
-                'rightKneeAngle': round(avg_features.get('right_knee_angle', 180), 1),
+                'legsCrossed': round(avg_features.get('legs_crossed', 0), 2),
+                'handsOnHips': round(avg_features.get('hands_on_hips_score', 0), 2),
+                'armsCrossed': round(avg_features.get('arms_crossed_score', 0), 2),
+                'armsRaised': round(avg_features.get('max_arm_raised', 0), 2),
+                'kneeAngle': round(avg_features.get('avg_knee_angle', 180), 1),
+                'asymmetry': round(avg_features.get('asymmetry', 0), 2),
+                # New masculine-associated metrics
+                'handsInPockets': round(avg_features.get('hands_in_pockets_score', 0), 2),
+                'handsBehindBack': round(avg_features.get('hands_behind_back_score', 0), 2),
+                'armsRelaxed': round(avg_features.get('arms_relaxed_score', 0), 2),
+                'powerPose': round(avg_features.get('power_pose_score', 0), 2),
+                'straightPosture': round(avg_features.get('straight_posture', 0), 2),
+                'symmetry': round(avg_features.get('overall_symmetry', 0), 2),
             }
         })
     
@@ -313,7 +459,7 @@ def export_data(clusters_info, most_male, most_female, output_path):
     print(f"Exported to {output_path}")
 
 if __name__ == "__main__":
-    base_dir = Path(__file__).parent.parent
+    base_dir = Path(__file__).parent.parent.parent
     csv_path = base_dir / "Unveiling_digital_mirrors.csv"
     output_path = base_dir / "frontend" / "data" / "pose_clusters.json"
     

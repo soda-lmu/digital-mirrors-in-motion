@@ -161,8 +161,8 @@ def create_skeleton_connections():
 
 if __name__ == "__main__":
     # Example usage
-    data_path = Path(__file__).parent.parent / "Unveiling_digital_mirrors.csv"
-    output_path = Path(__file__).parent.parent / "data" / "normalized_poses.csv"
+    data_path = Path(__file__).parent.parent.parent / "Unveiling_digital_mirrors.csv"
+    output_path = Path(__file__).parent.parent.parent / "data" / "normalized_poses.csv"
     
     # Ensure output directory exists
     output_path.parent.mkdir(parents=True, exist_ok=True)

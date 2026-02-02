@@ -11,11 +11,9 @@ Usage:
 import cv2
 import mediapipe as mp
 import pandas as pd
-import numpy as np
 from pathlib import Path
 import argparse
 from typing import Optional, Dict, List
-import json
 
 
 # MediaPipe Pose setup
@@ -38,8 +36,8 @@ LANDMARK_MAPPING = {
     26: 'rknee',
     27: 'lankle',
     28: 'rankle',
-    31: 'bigtoe',  # Left foot index
-    32: 'rbigtoe'  # Right foot index
+    31: 'bigtoe',  
+    32: 'rbigtoe' 
 }
 
 

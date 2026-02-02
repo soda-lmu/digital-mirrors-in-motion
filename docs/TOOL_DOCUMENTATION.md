@@ -112,7 +112,7 @@ normalized = {
   - **Prototype**: Average pose (centroid)
   - **Examples**: 3 real poses from each cluster
   - **Statistics**: Male/Female/Non-binary distribution percentages
-  - **Character**: Classification based on gender percentage (>60% = gendered, else neutral)
+  - **Character**: Classification based on gender percentage (>70% = gendered, else neutral)
 
 **Minimum Cluster Size**: 10 poses minimum (enforced during clustering in backend)
 
@@ -129,21 +129,38 @@ normalized = {
 }
 ```
 
-### 3. Pose Matching (Frontend)
+### 3. Pose Matching (Frontend) - Weighted KNN
 
-When a user uploads an image/video:
+When a user uploads an image/video, we use **Weighted K-Nearest Neighbors (K=5)** instead of single cluster matching to handle the fact that similar poses might be split across different clusters:
+
 1. **Extract** keypoints using MediaPipe Pose
 2. **Normalize** using same torso-based scaling
 3. **Calculate distance** to all 150 cluster prototypes (Euclidean distance on normalized keypoints)
-4. **Return top 4 matches** with percentages
+4. **Select top K=5 nearest clusters**
+5. **Weight by inverse distance** (closer clusters count more)
+6. **Average gender percentages** using the weights
 
 **Distance Formula**:
 ```
 distance = average(√[(x₁-x₂)² + (y₁-y₂)²]) for all keypoints
-lower distance = better match
+weight = 1 / (distance + 0.001)
 ```
 
-No confidence calculation - only raw distance-based matching.
+**Weighted Classification**:
+```javascript
+weightedMale% = Σ(weight_i × malePercent_i) / Σ(weight_i)
+weightedFemale% = Σ(weight_i × femalePercent_i) / Σ(weight_i)
+
+if weightedMale >= 70% → masculine
+if weightedFemale >= 70% → feminine
+else → neutral
+```
+
+**Why Weighted KNN?**
+- K-means clustering can split similar poses into different clusters by chance
+- Two nearly identical poses might end up in clusters with different gender distributions
+- By averaging the top 5 nearest clusters (weighted by distance), we get more stable classifications
+- The closest cluster still has the most influence, but nearby clusters smooth out edge cases
 
 ---
 
@@ -153,24 +170,24 @@ No confidence calculation - only raw distance-based matching.
 
 Upload a single photo:
 - **Instant pose detection** with skeleton overlay
-- **Gender pattern matching** showing closest cluster matches
-- **Percentage breakdown** (Male/Female/Non-binary) for the closest pose
+- **Weighted KNN classification** using top 5 nearest clusters
+- **Percentage breakdown** showing weighted average (Male/Female/Non-binary)
 - **Media literacy insights** explaining what the pose may communicate
 
 **Visualization**:
 - Current pose with overlay
-- 6 closest matching clusters with miniature skeletons
-- Gender distribution charts
+- 4 closest matching clusters with miniature skeletons
+- Weighted gender distribution charts
 
 ### Mode 2: Video Analysis (`video.html`)
 
 Upload a video up to 30 seconds:
 - **Frame-by-frame extraction** at 0.5-second intervals
-- **Best match selection** - only the closest matching cluster is used per frame
-- **Overall gender prediction** calculated by averaging all best matches
+- **Weighted KNN per frame** - uses top 5 clusters (not just 1)
+- **Overall gender prediction** calculated by counting classified frames
 - **Playback with skeleton overlay** synchronized with original video
 
-**Gender Percentage Calculation:**
+**Gender Classification:**
 
 1. Extract frame at 0.5s intervals (e.g., 0-0.5s-1.0s-1.5s...)
 2. For **each frame**:
@@ -178,18 +195,23 @@ Upload a video up to 30 seconds:
    - Normalize the pose (torso-based scaling)
    - Calculate distance to all 150 cluster prototypes
    - **Select the single closest match** (best cluster)
-   - Record that cluster's male/female percentages
-3. **Calculate video averages**:
+   - Classify as: masculine, feminine, or neutral based on cluster's character
+3. **Count matched frames**:
    ```
-   Video Male % = (sum of all best-match male %) / total frames
-   Video Female % = (sum of all best-match female %) / total frames
-   Video Non-binary % = remaining %
+   Total frames = N
+   Masculine frames = X (frames matching masculine clusters)
+   Feminine frames = Y (frames matching feminine clusters)
+   Neutral frames = Z (frames matching neutral clusters)
+   
+   Classification: whichever count is highest
+   If tied: show as neutral
    ```
 
 **Example**: 20 frames extracted
-- Frame 1-8 match clusters that are ~70% male → contributes 70% each
-- Frame 9-20 match clusters that are ~40% female → contributes 40% each
-- Final: Male = (8×70 + 12×40)/20 = **52% male avg**
+- Frames 1-8 match masculine clusters → 8 masculine counts
+- Frames 9-14 match feminine clusters → 6 feminine counts  
+- Frames 15-20 match neutral clusters → 6 neutral counts
+- **Result: 8/20 masculine, 6/20 feminine, 6/20 neutral → Classification: MASCULINE**
 
 **Key Features**:
 - Frame extraction rate: 0.5 seconds
@@ -200,23 +222,24 @@ Upload a video up to 30 seconds:
 
 **Output**:
 ```
-Average Male %: 52%
-Average Female %: 40%
-Average Non-binary %: 8%
-→ Classification: Masculine (because 52% ≥ 60% threshold? No → Neutral)
+Frames Analyzed: 20
+♂ Masculine: 8 frames
+♀ Feminine: 6 frames
+⚖ Neutral: 6 frames
+→ Classification: MASCULINE (majority vote)
 ```
 
 ### Mode 3: Pose Database (`patterns.html`)
 
 Explore all 150 clusters:
-- **Filter by gender category**: Masculine (>60% male), Feminine (>60% female), or Neutral (balanced)
+- **Filter by gender category**: Masculine (>70% male), Feminine (>70% female), or Neutral (balanced)
 - **Statistics panel**: Shows totals, averages, category counts
 - **Interactive cluster view**: Click any cluster to see prototype + examples
 - **Gender distribution info** for each cluster
 
 **Filtering Logic**:
-- **Masculine**: Only shows clusters where male ≥ 60%
-- **Feminine**: Only shows clusters where female ≥ 60%
+- **Masculine**: Only shows clusters where male ≥ 70%
+- **Feminine**: Only shows clusters where female ≥ 70%
 - **Neutral**: Only shows clusters where male/female difference ≤ 30%
 
 ---
@@ -320,12 +343,12 @@ const GENDER_THRESHOLD = 60;   // >60% = gendered pose
 ### Image Analysis (`frontend/image.js`)
 ```javascript
 const MIN_CLUSTER_SIZE = 10;   // Minimum cluster size
-const GENDER_THRESHOLD = 60;   // >60% = gendered pose
+const GENDER_THRESHOLD = 70;   // >70% = gendered pose
 ```
 
 ### Pattern Database (`frontend/patterns.html`)
 ```javascript
-const SIGNIFICANT_THRESHOLD = 60;  // Masculine/Feminine threshold
+const SIGNIFICANT_THRESHOLD = 70;  // Masculine/Feminine threshold
 const NEUTRAL_THRESHOLD = 15;      // Within 30% diff = neutral
 ```
 
@@ -346,17 +369,17 @@ Maximum duration: **30 seconds**
 
 ### Gender Classification
 
-1. **Masculine** (>60% male in dataset)
+1. **Masculine** (>70% male in dataset)
    - Tends to convey power, authority, confidence
    - Often wider stances, more open postures
    - Examples: relaxed sitting, standing with arms open
 
-2. **Feminine** (>60% female in dataset)
+2. **Feminine** (>70% female in dataset)
    - Often associated with approachability, elegance
    - Tends to have more closed or tilted postures
    - Examples: head tilt, one-legged stance, crossed arms
 
-3. **Neutral** (<60% in either direction)
+3. **Neutral** (<70% in either direction)
    - Used roughly equally by all genders
    - Not strongly coded as masculine or feminine
    - Examples: standing straight, hands at sides, neutral expression

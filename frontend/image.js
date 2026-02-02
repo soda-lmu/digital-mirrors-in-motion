@@ -25,7 +25,7 @@ let pendingCallback = null;    // Callback for async pose detection
 // ============================================================================
 
 const MIN_CLUSTER_SIZE = 10;   // Ignore clusters with fewer poses
-const GENDER_THRESHOLD = 60;   // >60% = gendered pose, else neutral
+const GENDER_DIFF_THRESHOLD = 30;   // >=30% difference = gendered pose, else neutral
 
 // Skeleton bones: pairs of keypoints to connect with lines
 const BONES = [
@@ -52,12 +52,15 @@ const $ = id => document.getElementById(id);
 
 /**
  * Classify a cluster as masculine, feminine, or neutral
- * Uses 60% threshold: >60% male → masculine, >60% female → feminine
+ * Uses difference-based threshold: if difference between genders > 30%, categorize as that gender
  */
 function getGenderClass(cluster) {
-    if (cluster.malePercent >= GENDER_THRESHOLD) return 'masculine';
-    if (cluster.femalePercent >= GENDER_THRESHOLD) return 'feminine';
-    return 'neutral';
+    const maleDiff = cluster.malePercent - cluster.femalePercent;
+    const femaleDiff = cluster.femalePercent - cluster.malePercent;
+    
+    if (maleDiff >= 30) return 'masculine';     // >=30% more male
+    if (femaleDiff >= 30) return 'feminine';    // >=30% more female
+    return 'neutral';                            // Difference < 30%
 }
 
 /** Get color for gender class (blue=masc, pink=fem, green=neutral) */
@@ -131,6 +134,7 @@ function findMatchingClusters(keypoints, count = 4) {
     if (!POSE_CLUSTERS?.clusters || !keypoints) return [];
     const normalizedPose = normalizeKeypoints(keypoints);
     if (!normalizedPose) return [];
+    // Note: Don't canonicalize - prototypes in JSON are not canonicalized
     
     return POSE_CLUSTERS.clusters
         .filter(c => c.prototype)
@@ -138,6 +142,47 @@ function findMatchingClusters(keypoints, count = 4) {
         .sort((a, b) => a.distance - b.distance)
         .slice(0, count)
         .map(s => s.cluster);
+}
+
+/**
+ * Find the single closest matching cluster for a pose.
+ * Returns the cluster's actual stats (not weighted averages).
+ */
+function findClosestCluster(keypoints) {
+    if (!POSE_CLUSTERS?.clusters || !keypoints) return null;
+    const normalizedPose = normalizeKeypoints(keypoints);
+    if (!normalizedPose) return null;
+    
+    // Find closest cluster by distance
+    let closest = null;
+    let minDist = Infinity;
+    
+    for (const cluster of POSE_CLUSTERS.clusters) {
+        if (!cluster.prototype) continue;
+        const dist = poseDistance(normalizedPose, cluster.prototype);
+        if (dist < minDist) {
+            minDist = dist;
+            closest = cluster;
+        }
+    }
+    
+    if (!closest) return null;
+    
+    // Classification based on the cluster's actual stats
+    const maleDiff = closest.malePercent - closest.femalePercent;
+    const femaleDiff = closest.femalePercent - closest.malePercent;
+    let character;
+    if (maleDiff >= GENDER_DIFF_THRESHOLD) character = 'masculine';
+    else if (femaleDiff >= GENDER_DIFF_THRESHOLD) character = 'feminine';
+    else character = 'neutral';
+    
+    return {
+        cluster: closest,
+        character,
+        malePercent: closest.malePercent,
+        femalePercent: closest.femalePercent,
+        distance: minDist
+    };
 }
 
 // ============================================================================
@@ -236,32 +281,18 @@ function updatePatternPanel(keypoints) {
         return;
     }
     
-    const matches = findMatchingClusters(keypoints, 1);
-    if (matches.length === 0) {
+    // Find the single closest matching cluster
+    const match = findClosestCluster(keypoints);
+    if (!match) {
         container.innerHTML = '<p class="placeholder-text">No matching patterns found</p>';
         return;
     }
     
-    const c = matches[0];
-    const genderClass = getGenderClass(c);
-    const color = getGenderColor(c);
-    
-    let label, description;
-    if (genderClass === 'masculine') {
-        label = 'Masculine';
-        description = `This pose is predominantly used by males (${c.malePercent.toFixed(0)}%)`;
-    } else if (genderClass === 'feminine') {
-        label = 'Feminine';
-        description = `This pose is predominantly used by females (${c.femalePercent.toFixed(0)}%)`;
-    } else {
-        label = 'Neutral / Mixed';
-        description = 'This pose is used similarly by both genders';
-    }
+    const c = match.cluster;
     
     container.innerHTML = `
         <div class="pattern-display">
             <div class="pattern-circle" style="background: conic-gradient(#89b4fa ${c.malePercent}%, #f5c2e7 0%);">
-                <span class="pattern-label" style="color: ${color};">${label}</span>
             </div>
             <div class="pattern-bars">
                 <div class="pattern-bar-item">
@@ -275,8 +306,7 @@ function updatePatternPanel(keypoints) {
                     <span>${c.femalePercent.toFixed(0)}%</span>
                 </div>
             </div>
-            <p class="pattern-description">${description}</p>
-            <p class="pattern-cluster-info">Closest match: Cluster #${c.id} (${c.size} similar poses)</p>
+            <p class="pattern-cluster-info">Closest cluster: #${c.id}</p>
         </div>
     `;
 }
@@ -297,12 +327,11 @@ function updateMatchingClusters(keypoints) {
     
     container.innerHTML = '<div class="clusters-grid">' + matches.map((c, i) => {
         const color = getGenderColor(c);
-        const symbol = getGenderClass(c) === 'masculine' ? '♂' : getGenderClass(c) === 'feminine' ? '♀' : '⚖';
         return `
             <div class="cluster-card" style="border-color:${color};">
                 <canvas id="cluster${i}" width="80" height="100"></canvas>
                 <div class="cluster-info">
-                    <span class="cluster-id" style="color:${color};">${symbol} #${c.id}</span>
+                    <span class="cluster-id" style="color:${color};">#${c.id}</span>
                     <span class="cluster-stats">${c.malePercent.toFixed(0)}%M / ${c.femalePercent.toFixed(0)}%F</span>
                 </div>
             </div>
@@ -317,7 +346,7 @@ function updateMatchingClusters(keypoints) {
     }, 10);
 }
 
-/** Update "Media Literacy Analysis" panel */
+/** Update "Media Literacy Analysis" panel - uses closest cluster */
 function updateLiteracyPanel(keypoints) {
     const container = $('literacyOutput');
     if (!keypoints) {
@@ -325,42 +354,27 @@ function updateLiteracyPanel(keypoints) {
         return;
     }
     
-    const matches = findMatchingClusters(keypoints, 1);
-    if (matches.length === 0) {
+    const match = findClosestCluster(keypoints);
+    if (!match) {
         container.innerHTML = '<p class="placeholder-text">No matching patterns for analysis</p>';
         return;
     }
     
-    const c = matches[0];
-    const genderClass = getGenderClass(c);
-    const genderDiff = Math.abs(c.malePercent - c.femalePercent);
-    
-    let typeLabel, typeClass, insight;
-    
-    if (genderClass === 'masculine') {
-        typeLabel = 'MASCULINE CODED';
-        typeClass = 'dominant';
-        insight = `<p class="insight"><strong>💡 Insight:</strong> This pose is predominantly used by men in media (${c.malePercent.toFixed(0)}% male). Poses like this often convey power, confidence, or authority.</p>`;
-    } else if (genderClass === 'feminine') {
-        typeLabel = 'FEMININE CODED';
-        typeClass = 'submissive';
-        insight = `<p class="insight"><strong>💡 Insight:</strong> This pose is predominantly used by women in media (${c.femalePercent.toFixed(0)}% female). Such poses are often associated with grace, approachability, or elegance.</p>`;
-    } else {
-        typeLabel = 'GENDER NEUTRAL';
-        typeClass = 'neutral';
-        if (genderDiff < 10) {
-            insight = `<p class="insight"><strong>💡 Insight:</strong> This is a truly neutral pose, used almost equally by both genders in media (${genderDiff.toFixed(0)}% difference).</p>`;
-        } else {
-            const leaning = c.malePercent > c.femalePercent ? 'masculine' : 'feminine';
-            insight = `<p class="insight"><strong>💡 Insight:</strong> This pose leans slightly ${leaning} but doesn't strongly favor either gender (below ${GENDER_THRESHOLD}% threshold).</p>`;
-        }
-    }
+    const c = match.cluster;
     
     container.innerHTML = `
-        <div class="pose-type ${typeClass}">${typeLabel}</div>
-        <p>Gender distribution: <strong style="color:#89b4fa;">${c.malePercent.toFixed(0)}%</strong> male, <strong style="color:#f5c2e7;">${c.femalePercent.toFixed(0)}%</strong> female</p>
-        <p><strong>Category:</strong> Cluster #${c.id} (${c.size} similar poses in dataset)</p>
-        ${insight}
+        <p><strong>Gender distribution in closest cluster:</strong></p>
+        <div class="gender-bars">
+            <div class="gender-bar male-bar">
+                <div class="bar-fill" style="width: ${c.malePercent}%; background: #89b4fa;"></div>
+                <span class="bar-label">Male: ${c.malePercent.toFixed(0)}%</span>
+            </div>
+            <div class="gender-bar female-bar">
+                <div class="bar-fill" style="width: ${c.femalePercent}%; background: #f5c2e7;"></div>
+                <span class="bar-label">Female: ${c.femalePercent.toFixed(0)}%</span>
+            </div>
+        </div>
+        <p style="margin-top: 10px;"><strong>Closest cluster:</strong> #${c.id}</p>
     `;
 }
 
@@ -468,11 +482,10 @@ async function processImage(img) {
             updateMatchingClusters(kp);
             updateLiteracyPanel(kp);
             
-            const matches = findMatchingClusters(kp, 1);
-            if (matches.length > 0) {
-                const gc = getGenderClass(matches[0]);
-                const label = gc === 'neutral' ? 'Neutral' : gc.charAt(0).toUpperCase() + gc.slice(1);
-                setStatus(`✓ ${label} pose detected (Cluster #${matches[0].id})`, 'success');
+            // Use closest cluster for classification
+            const match = findClosestCluster(kp);
+            if (match) {
+                setStatus(`✓ Pose detected! (${match.malePercent.toFixed(0)}%M / ${match.femalePercent.toFixed(0)}%F)`, 'success');
             } else {
                 setStatus('✓ Pose detected!', 'success');
             }

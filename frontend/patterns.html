@@ -326,7 +326,7 @@
             </nav>
         </header>
         
-        <p class="page-description">Explore how poses are distributed across genders in media. Select a category to see poses that are predominantly used by that gender (>60% threshold).</p>
+<p class="page-description">Explore how poses are distributed across genders in media. Select a category to see poses that are predominantly used by that gender.</p>
         
         <div class="gender-selector">
             <button class="gender-btn male" data-gender="male">
@@ -380,7 +380,7 @@
         let currentGender = null;
         
         // Thresholds
-        const SIGNIFICANT_THRESHOLD = 60; // Must be >60% for one gender to be considered significantly gendered
+        const SIGNIFICANT_THRESHOLD = 30; // Difference threshold for gender classification (>30% difference)
         const NEUTRAL_THRESHOLD = 15;     // Must be within 15% of 50/50 to be considered neutral
         
         // Bones for drawing
@@ -463,22 +463,22 @@
             let filtered = [];
             
             if (gender === 'male') {
-                // Only show clusters where male is SIGNIFICANTLY higher (>60%)
-                filtered = POSE_CLUSTERS.clusters.filter(c => c.malePercent >= SIGNIFICANT_THRESHOLD);
+                // Show clusters where male - female >= 30% difference
+                filtered = POSE_CLUSTERS.clusters.filter(c => (c.malePercent - c.femalePercent) >= SIGNIFICANT_THRESHOLD);
                 filtered = filtered.map(c => ({ ...c, genderPercent: c.malePercent }));
                 filtered.sort((a, b) => b.malePercent - a.malePercent);
             } 
             else if (gender === 'female') {
-                // Only show clusters where female is SIGNIFICANTLY higher (>60%)
-                filtered = POSE_CLUSTERS.clusters.filter(c => c.femalePercent >= SIGNIFICANT_THRESHOLD);
+                // Show clusters where female - male >= 30% difference
+                filtered = POSE_CLUSTERS.clusters.filter(c => (c.femalePercent - c.malePercent) >= SIGNIFICANT_THRESHOLD);
                 filtered = filtered.map(c => ({ ...c, genderPercent: c.femalePercent }));
-                filtered.sort((a, b) => b.femalePercent - a.femalePercent);
+                filtered.sort((a, b) => b.femalePercent - a.malePercent);
             }
             else if (gender === 'neutral') {
-                // Only show clusters that are close to 50/50 split (within NEUTRAL_THRESHOLD)
+                // Show clusters that are close to 50/50 split (< 30% difference)
                 filtered = POSE_CLUSTERS.clusters.filter(c => {
                     const diff = Math.abs(c.malePercent - c.femalePercent);
-                    return diff <= (NEUTRAL_THRESHOLD * 2); // e.g., within 30% of each other
+                    return diff < SIGNIFICANT_THRESHOLD; // Under 30% difference
                 });
                 // Sort by how close to 50/50 they are
                 filtered = filtered.map(c => {

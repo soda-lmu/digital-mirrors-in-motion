@@ -35,7 +35,7 @@ let isCancelled = false;       // Flag: was processing cancelled?
 const MAX_DURATION = 30;       // Maximum video length in seconds
 const FRAME_INTERVAL = 0.5;    // Extract pose every 0.5 seconds
 const MIN_CLUSTER_SIZE = 10;   // Ignore clusters with fewer poses
-const GENDER_THRESHOLD = 60;   // >60% = gendered pose, else neutral
+const GENDER_DIFF_THRESHOLD = 30;   // >=30% difference = gendered pose, else neutral
 
 // Skeleton bones: pairs of keypoints to connect with lines
 const BONES = [
@@ -69,13 +69,20 @@ const $ = id => document.getElementById(id);
 
 /**
  * Classify a cluster as masculine, feminine, or neutral
- * Uses 60% threshold: >60% male → masculine, >60% female → feminine
+ * Uses 70% threshold: >70% male → masculine, >70% female → feminine
+ */
+/**
+ * Classify a cluster as masculine, feminine, or neutral
+ * Uses difference-based threshold: if difference between genders > 30%, categorize as that gender
  */
 function getGenderClass(cluster) {
     if (!cluster) return 'neutral';
-    if (cluster.malePercent >= GENDER_THRESHOLD) return 'masculine';
-    if (cluster.femalePercent >= GENDER_THRESHOLD) return 'feminine';
-    return 'neutral';
+    const maleDiff = cluster.malePercent - cluster.femalePercent;
+    const femaleDiff = cluster.femalePercent - cluster.malePercent;
+    
+    if (maleDiff >= 30) return 'masculine';     // >=30% more male
+    if (femaleDiff >= 30) return 'feminine';    // >=30% more female
+    return 'neutral';                            // Difference < 30%
 }
 
 /** Get color for gender class (blue=masc, pink=fem, green=neutral) */
@@ -145,11 +152,12 @@ function poseDistance(pose1, pose2) {
     return count > 0 ? totalDist / count : Infinity;
 }
 
-/** Find closest matching clusters for a pose */
+/** Find closest matching clusters for a pose with distances */
 function findMatchingClusters(keypoints, count = 4) {
     if (!POSE_CLUSTERS?.clusters || !keypoints) return [];
     const normalizedPose = normalizeKeypoints(keypoints);
     if (!normalizedPose) return [];
+    // Note: Don't canonicalize - prototypes in JSON are not canonicalized
     
     return POSE_CLUSTERS.clusters
         .filter(c => c.prototype)
@@ -157,6 +165,47 @@ function findMatchingClusters(keypoints, count = 4) {
         .sort((a, b) => a.distance - b.distance)
         .slice(0, count)
         .map(s => s.cluster);
+}
+
+/**
+ * Find the single closest matching cluster for a pose.
+ * Returns the cluster's actual stats (not weighted averages).
+ */
+function findClosestCluster(keypoints) {
+    if (!POSE_CLUSTERS?.clusters || !keypoints) return null;
+    const normalizedPose = normalizeKeypoints(keypoints);
+    if (!normalizedPose) return null;
+    
+    // Find closest cluster by distance
+    let closest = null;
+    let minDist = Infinity;
+    
+    for (const cluster of POSE_CLUSTERS.clusters) {
+        if (!cluster.prototype) continue;
+        const dist = poseDistance(normalizedPose, cluster.prototype);
+        if (dist < minDist) {
+            minDist = dist;
+            closest = cluster;
+        }
+    }
+    
+    if (!closest) return null;
+    
+    // Classification based on the cluster's actual stats
+    const maleDiff = closest.malePercent - closest.femalePercent;
+    const femaleDiff = closest.femalePercent - closest.malePercent;
+    let character;
+    if (maleDiff >= GENDER_DIFF_THRESHOLD) character = 'masculine';
+    else if (femaleDiff >= GENDER_DIFF_THRESHOLD) character = 'feminine';
+    else character = 'neutral';
+    
+    return {
+        cluster: closest,
+        character,
+        malePercent: closest.malePercent,
+        femalePercent: closest.femalePercent,
+        distance: minDist
+    };
 }
 
 // ============================================================================
@@ -295,7 +344,7 @@ function formatTime(s) {
 // UI UPDATE FUNCTIONS
 // ============================================================================
 
-/** Update "Current Pose" panel */
+/** Update "Current Pose" panel - shows the closest cluster's actual stats */
 function updatePatternPanel(keypoints) {
     const container = $('patternContent');
     if (!keypoints) {
@@ -303,25 +352,24 @@ function updatePatternPanel(keypoints) {
         return;
     }
     
-    const matches = findMatchingClusters(keypoints, 1);
-    if (matches.length === 0) {
+    // Find the single closest matching cluster
+    const match = findClosestCluster(keypoints);
+    if (!match) {
         container.innerHTML = '<p class="placeholder-text">No pattern match</p>';
         return;
     }
     
-    const c = matches[0];
-    const genderClass = getGenderClass(c);
-    const color = getGenderColor(c);
-    const label = genderClass === 'masculine' ? '♂ Masculine' : genderClass === 'feminine' ? '♀ Feminine' : '⚖ Neutral';
+    const c = match.cluster;
+    const color = match.character === 'masculine' ? '#89b4fa' : match.character === 'feminine' ? '#f5c2e7' : '#a6e3a1';
     
     container.innerHTML = `
         <div class="pattern-display compact">
             <div class="pattern-circle small" style="background: conic-gradient(#89b4fa ${c.malePercent}%, #f5c2e7 0%);">
-                <span class="pattern-label" style="color:${color}; font-size: 0.7rem;">${label}</span>
             </div>
             <div class="pattern-info">
-                <span class="cluster-ref">Cluster #${c.id}</span>
-                <span style="font-size:0.8rem; color:#6c7086;">${c.malePercent.toFixed(0)}%M / ${c.femalePercent.toFixed(0)}%F</span>
+                <span class="cluster-ref" style="color:${color};">Cluster #${c.id}</span>
+                <span style="font-size:0.8rem; color:#89b4fa;">${c.malePercent.toFixed(0)}% M</span>
+                <span style="font-size:0.8rem; color:#f5c2e7;">${c.femalePercent.toFixed(0)}% F</span>
             </div>
         </div>
     `;
@@ -343,11 +391,11 @@ function updateMatchingClusters(keypoints) {
     
     container.innerHTML = '<div class="clusters-grid compact">' + matches.map((c, i) => {
         const color = getGenderColor(c);
-        const symbol = getGenderClass(c) === 'masculine' ? '♂' : getGenderClass(c) === 'feminine' ? '♀' : '⚖';
         return `
             <div class="cluster-card mini" style="border-color:${color};">
                 <canvas id="cluster${i}" width="60" height="70"></canvas>
-                <span class="cluster-id" style="color:${color};">${symbol} #${c.id}</span>
+                <span class="cluster-id" style="color:${color};">#${c.id}</span>
+                <span style="font-size:0.65rem; color:#6c7086;">${c.malePercent.toFixed(0)}%M</span>
             </div>
         `;
     }).join('') + '</div>';
@@ -360,7 +408,7 @@ function updateMatchingClusters(keypoints) {
     }, 10);
 }
 
-/** Show overall prediction based on all extracted poses */
+/** Show summary of detected poses - no final verdict, just breakdown */
 function showPrediction() {
     if (extractedPoses.length === 0) return;
     
@@ -368,55 +416,50 @@ function showPrediction() {
     let totalMale = 0, totalFemale = 0;
     
     extractedPoses.forEach(p => {
-        if (p.cluster) {
-            const gc = getGenderClass(p.cluster);
-            if (gc === 'masculine') mascCount++;
-            else if (gc === 'feminine') femCount++;
-            else neutCount++;
-            totalMale += p.cluster.malePercent;
-            totalFemale += p.cluster.femalePercent;
-        }
+        // Use stored character (based on cluster's actual stats)
+        const gc = p.character || 'neutral';
+        if (gc === 'masculine') mascCount++;
+        else if (gc === 'feminine') femCount++;
+        else neutCount++;
+        totalMale += p.malePercent || 0;
+        totalFemale += p.femalePercent || 0;
     });
     
     const total = extractedPoses.length;
-    const avgMale = totalMale / total;
-    const avgFemale = totalFemale / total;
+    const avgMale = total > 0 ? (totalMale / total).toFixed(1) : 0;
+    const avgFemale = total > 0 ? (totalFemale / total).toFixed(1) : 0;
     
-    let prediction, description;
-    if (avgMale >= GENDER_THRESHOLD) {
-        prediction = 'masculine';
-        description = 'Predominantly masculine poses detected';
-    } else if (avgFemale >= GENDER_THRESHOLD) {
-        prediction = 'feminine';
-        description = 'Predominantly feminine poses detected';
-    } else {
-        prediction = 'neutral';
-        description = 'Mixed or neutral pose patterns';
-    }
-    
-    const labels = { masculine: '♂ MASCULINE', feminine: '♀ FEMININE', neutral: '⚖ NEUTRAL' };
-    const colors = { masculine: '#89b4fa', feminine: '#f5c2e7', neutral: '#a6e3a1' };
-    
-    $('predictionCard').style.display = 'block';
-    $('predictionContent').innerHTML = `
-        <div class="prediction-result ${prediction}" style="color:${colors[prediction]};">${labels[prediction]}</div>
-        <p style="font-size:0.85rem; color:#6c7086; margin-top:8px;">${description}</p>
-        <div class="prediction-stats">
-            <span style="color:#89b4fa;">♂ ${avgMale.toFixed(0)}% avg</span>
-            <span style="color:#f5c2e7;">♀ ${avgFemale.toFixed(0)}% avg</span>
-        </div>
-    `;
-    
+    // Show summary card with pose breakdown (no final verdict)
     $('summaryCard').style.display = 'block';
     $('summaryContent').innerHTML = `
-        <div class="summary-stats">
-            <div class="stat"><span class="value">${total}</span><span class="label">Poses</span></div>
-            <div class="stat"><span class="value" style="color:#89b4fa;">${mascCount}</span><span class="label">♂ Masc</span></div>
-            <div class="stat"><span class="value" style="color:#f5c2e7;">${femCount}</span><span class="label">♀ Fem</span></div>
-            <div class="stat"><span class="value" style="color:#a6e3a1;">${neutCount}</span><span class="label">⚖ Neut</span></div>
+        <div class="summary-header">
+            <h3 style="margin:0; color:#cdd6f4;">Detected Poses: ${total}</h3>
+            <p style="font-size:0.8rem; color:#6c7086; margin:4px 0 12px 0;">Extracted every 0.5 seconds</p>
         </div>
-        <p style="font-size:0.8rem; color:#6c7086; margin-top:10px;">Classification: >60% = gendered, otherwise neutral</p>
+        <div class="summary-breakdown">
+            <div class="breakdown-item" style="border-left: 3px solid #89b4fa; padding-left: 12px; margin-bottom: 10px;">
+                <div style="font-size: 1.5rem; font-weight: bold; color: #89b4fa;">${mascCount}</div>
+                <div style="font-size: 0.85rem; color: #6c7086;">Masculine-associated poses</div>
+                <div style="font-size: 0.75rem; color: #585b70;">(≥30% more male in dataset)</div>
+            </div>
+            <div class="breakdown-item" style="border-left: 3px solid #f5c2e7; padding-left: 12px; margin-bottom: 10px;">
+                <div style="font-size: 1.5rem; font-weight: bold; color: #f5c2e7;">${femCount}</div>
+                <div style="font-size: 0.85rem; color: #6c7086;">Feminine-associated poses</div>
+                <div style="font-size: 0.75rem; color: #585b70;">(≥30% more female in dataset)</div>
+            </div>
+            <div class="breakdown-item" style="border-left: 3px solid #a6e3a1; padding-left: 12px; margin-bottom: 10px;">
+                <div style="font-size: 1.5rem; font-weight: bold; color: #a6e3a1;">${neutCount}</div>
+                <div style="font-size: 0.85rem; color: #6c7086;">Neutral poses</div>
+                <div style="font-size: 0.75rem; color: #585b70;">(<30% difference)</div>
+            </div>
+        </div>
+        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #313244;">
+            <p style="font-size: 0.8rem; color: #6c7086; margin: 0;">Average across all poses: <span style="color:#89b4fa;">${avgMale}% male</span> / <span style="color:#f5c2e7;">${avgFemale}% female</span></p>
+        </div>
     `;
+    
+    // Hide the prediction card (no final verdict)
+    $('predictionCard').style.display = 'none';
 }
 
 /** Render extracted poses gallery */
@@ -424,13 +467,14 @@ function renderPosesGallery() {
     const container = $('posesContainer');
     
     container.innerHTML = extractedPoses.map((p, i) => {
-        const color = getGenderColor(p.cluster);
-        const symbol = getGenderClass(p.cluster) === 'masculine' ? '♂' : getGenderClass(p.cluster) === 'feminine' ? '♀' : '⚖';
+        // Use stored character and malePercent from the closest cluster
+        const color = p.character === 'masculine' ? '#89b4fa' : p.character === 'feminine' ? '#f5c2e7' : '#a6e3a1';
+        const malePercent = p.malePercent?.toFixed(0) || '?';
         return `
             <div class="pose-thumb ${i === currentPoseIndex ? 'active' : ''}" data-index="${i}">
                 <canvas id="pose${i}" width="60" height="50"></canvas>
                 <span class="pose-time">${formatTime(p.time)}</span>
-                <span class="pose-cluster" style="color:${color}">${p.cluster ? symbol + ' #' + p.cluster.id : '-'}</span>
+                <span class="pose-cluster" style="color:${color}">${p.cluster ? '#' + p.cluster.id + ' (' + malePercent + '%M)' : '-'}</span>
             </div>
         `;
     }).join('');
@@ -438,7 +482,8 @@ function renderPosesGallery() {
     setTimeout(() => {
         extractedPoses.forEach((p, i) => {
             const canvas = $(`pose${i}`);
-            if (canvas && p.normalizedKeypoints) drawMiniSkeleton(canvas, p.normalizedKeypoints, getGenderColor(p.cluster));
+            const color = p.character === 'masculine' ? '#89b4fa' : p.character === 'feminine' ? '#f5c2e7' : '#a6e3a1';
+            if (canvas && p.normalizedKeypoints) drawMiniSkeleton(canvas, p.normalizedKeypoints, color);
         });
     }, 10);
     
@@ -560,12 +605,15 @@ async function processVideoInBackground(video) {
         await new Promise(resolve => { video.onloadeddata = resolve; setTimeout(resolve, 2000); });
     }
     
-    const totalFrames = Math.floor(video.duration / FRAME_INTERVAL) + 1;
-    console.log(`Processing: ${video.duration.toFixed(1)}s, ${totalFrames} frames`);
+    // Skip first and last second of video to avoid skeleton detection issues
+    const startTime = 1.0;
+    const endTime = Math.max(startTime + 0.5, video.duration - 1.0);
+    const totalFrames = Math.floor((endTime - startTime) / FRAME_INTERVAL) + 1;
+    console.log(`Processing: ${video.duration.toFixed(1)}s, analyzing ${startTime}s to ${endTime.toFixed(1)}s (${totalFrames} frames)`);
     $('processingText').textContent = 'Extracting poses...';
     
     for (let i = 0; i < totalFrames && isProcessing && !isCancelled; i++) {
-        const time = i * FRAME_INTERVAL;
+        const time = startTime + (i * FRAME_INTERVAL);
         
         // Seek to frame
         await new Promise(resolve => {
@@ -586,10 +634,21 @@ async function processVideoInBackground(video) {
             const landmarks = result.poseLandmarks.map(lm => ({ x: lm.x, y: lm.y, z: lm.z, visibility: lm.visibility }));
             const kp = landmarksToNormalizedKeypoints(landmarks);
             
+            // Find the single closest matching cluster
+            const match = findClosestCluster(kp);
+            
+            // Debug: log each match
+            if (match) {
+                console.log(`Frame ${i}: Cluster #${match.cluster.id}, ${match.malePercent.toFixed(1)}%M - ${match.femalePercent.toFixed(1)}%F = ${(match.malePercent - match.femalePercent).toFixed(1)}% diff → ${match.character}`);
+            }
+            
             extractedPoses.push({
                 time, frameIndex: i, landmarks,
                 normalizedKeypoints: normalizeKeypoints(kp),
-                cluster: findMatchingClusters(kp, 1)[0] || null
+                cluster: match?.cluster || null,
+                character: match?.character || 'neutral',
+                malePercent: match?.malePercent || 0,
+                femalePercent: match?.femalePercent || 0
             });
             
             drawSkeleton(ctx, landmarksToCanvasKeypoints(landmarks, canvas, video.videoWidth, video.videoHeight));
@@ -602,6 +661,13 @@ async function processVideoInBackground(video) {
     }
     
     isProcessing = false;
+    
+    // Debug: log summary
+    const mascCount = extractedPoses.filter(p => p.character === 'masculine').length;
+    const femCount = extractedPoses.filter(p => p.character === 'feminine').length;
+    const neutCount = extractedPoses.filter(p => p.character === 'neutral').length;
+    console.log(`Processing complete: ${extractedPoses.length} poses (${mascCount} masc, ${femCount} fem, ${neutCount} neutral)`);
+    
     return !isCancelled && extractedPoses.length > 0;
 }
 
@@ -663,8 +729,19 @@ function togglePlayback() {
 // ============================================================================
 
 async function handleVideoUpload(file) {
+    // Clear all previous state FIRST
     isCancelled = false;
+    isProcessing = false;
+    isPlaying = false;
     pendingCallback = null;
+    extractedPoses = [];       // Clear previous poses
+    currentPoseIndex = 0;      // Reset pose index
+    
+    // Cancel any ongoing playback
+    if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+    }
     
     // Show processing UI
     $('uploadPlaceholder').style.display = 'none';
@@ -678,7 +755,11 @@ async function handleVideoUpload(file) {
     $('progressText').textContent = '0%';
     $('processingText').textContent = 'Loading video...';
     
+    // Clean up previous video
     const video = $('videoElement');
+    if (video.src?.startsWith('blob:')) {
+        URL.revokeObjectURL(video.src);
+    }
     video.src = URL.createObjectURL(file);
     
     try {
