@@ -1,1 +1,1 @@
-# This file makes the src directory a Python package
+# Tool package: cluster_poses, normalize, mediapipe_pipeline

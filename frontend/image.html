@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- Image Pose Analysis: upload image → MediaPipe pose detection → cluster matching -->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -44,39 +45,27 @@
                 <div id="previewArea" class="preview-area" style="display: none;">
                     <canvas id="previewCanvas" width="500" height="600"></canvas>
                 </div>
-
-                <div id="statusBar" class="status-bar">
-                    <span>Ready to analyze</span>
-                </div>
             </div>
 
             <!-- Right: Analysis Results -->
             <div class="analysis-panel">
+                <div class="card">
+                    <h2>📖 How it works</h2>
+                    <div id="matchingClusters" class="matching-clusters">
+                        <!-- Filled by updateMatchingClusters -->
+                    </div>
+                </div>
+
                 <div class="card">
                     <h2>🎯 Pose Pattern</h2>
                     <div id="patternContent" class="pattern-content">
                         <p class="placeholder-text">Upload an image to see pattern analysis</p>
                     </div>
                 </div>
-
-                <div class="card">
-                    <h2>🎭 Matching Pose Categories</h2>
-                    <p class="card-subtitle">Closest matches from the pose dataset</p>
-                    <div id="matchingClusters" class="matching-clusters">
-                        <p class="placeholder-text">Upload an image to find matching poses</p>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <h2>📚 Media Literacy Analysis</h2>
-                    <div id="literacyOutput" class="literacy-output">
-                        <p class="placeholder-text">Upload an image to see analysis...</p>
-                    </div>
-                </div>
             </div>
         </div>
     </div>
 
-    <script src="image.js"></script>
+    <script type="module" src="image.js"></script>
 </body>
 </html>

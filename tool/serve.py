@@ -1,6 +1,10 @@
 """
-Simple HTTP server to serve the frontend application.
-Run this and open http://localhost:8000 in your browser.
+Local HTTP server for Unveiling Digital Mirrors.
+Serves frontend/ (HTML, JS, CSS, data/) on http://localhost:8000.
+
+Usage:
+    python tool/serve.py
+Then open http://localhost:8000 in browser.
 """
 
 import http.server
@@ -19,7 +23,7 @@ if __name__ == "__main__":
     os.chdir(DIRECTORY)
     
     with socketserver.TCPServer(("", PORT), Handler) as httpd:
-        print(f"✨ Unveiling Digital Mirrors - Pose Analysis Tool")
+        print(f"Unveiling Digital Mirrors - Pose Analysis Tool")
         print(f"=" * 50)
         print(f"Server running at: http://localhost:{PORT}")
         print(f"Press Ctrl+C to stop")

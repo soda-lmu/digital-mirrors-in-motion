@@ -1,28 +1,25 @@
 """
-Part 1.2: MediaPipe Brand Pipeline
+MediaPipe Pose Extraction
+=========================
+Extracts poses from video and images using MediaPipe Pose.
+Output format matches cluster_poses.py (17 joints) for cluster matching.
 
-This script processes images from clothing company datasets to extract
-pose landmarks and create a "Corporate Master CSV" for comparison.
-
-Usage:
-    python mediapipe_pipeline.py --input_dir /path/to/brand/images --output brand_poses.csv
+Requires: pip install mediapipe opencv-python
 """
 
 import cv2
-import mediapipe as mp
-import pandas as pd
 from pathlib import Path
-import argparse
-from typing import Optional, Dict, List
+from typing import List, Dict, Any, Optional
 
+try:
+    import mediapipe as mp
+except ImportError:
+    mp = None
 
-# MediaPipe Pose setup
-mp_pose = mp.solutions.pose
-mp_drawing = mp.solutions.drawing_utils
-
-
-# MediaPipe landmark indices to our naming convention
-LANDMARK_MAPPING = {
+# MediaPipe landmark indices → our joint names (matches cluster_poses.py JOINTS)
+# MP: 0=Nose, 11=LShoulder, 12=RShoulder, 13=LElbow, 14=RElbow, 15=LWrist, 16=RWrist,
+#     23=LHip, 24=RHip, 25=LKnee, 26=RKnee, 27=LAnkle, 28=RAnkle, 29=LFootIndex, 30=RFootIndex
+MP_TO_OUR = {
     0: 'nose',
     11: 'lshoulder',
     12: 'rshoulder',
@@ -36,191 +33,126 @@ LANDMARK_MAPPING = {
     26: 'rknee',
     27: 'lankle',
     28: 'rankle',
-    31: 'bigtoe',  
-    32: 'rbigtoe' 
+    29: 'bigtoe',
+    30: 'rbigtoe',
 }
 
+FRAME_INTERVAL = 0.5
+SKIP_EDGE_SECONDS = 2
+MIN_VISIBILITY = 0.5
 
-def extract_pose_from_image(image_path: str, pose_model) -> Optional[Dict]:
-    """
-    Extract pose landmarks from a single image using MediaPipe.
-    
-    Args:
-        image_path: Path to image file
-        pose_model: MediaPipe Pose instance
-    
-    Returns:
-        Dict with x_* and y_* coordinates, or None if no pose detected
-    """
-    image = cv2.imread(str(image_path))
-    if image is None:
-        print(f"  Warning: Could not read image: {image_path}")
+
+def _mp_to_keypoints(landmarks, img_w: int, img_h: int) -> Optional[Dict[str, Dict[str, float]]]:
+    """Convert MediaPipe landmarks to {joint: {x,y}} in [0,1]."""
+    if not landmarks or len(landmarks) < 31:
         return None
-    
-    # Convert BGR to RGB
-    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    h, w = image.shape[:2]
-    
-    # Process image
-    results = pose_model.process(image_rgb)
-    
-    if not results.pose_landmarks:
+    kp = {}
+    for mp_idx, our_name in MP_TO_OUR.items():
+        lm = landmarks[mp_idx]
+        vis = getattr(lm, 'visibility', 1.0)
+        if vis < MIN_VISIBILITY:
+            continue
+        kp[our_name] = {
+            'x': lm.x,
+            'y': lm.y
+        }
+    # Derived: neck = midpoint of shoulders, midhip = midpoint of hips
+    if kp.get('lshoulder') and kp.get('rshoulder'):
+        kp['neck'] = {
+            'x': (kp['lshoulder']['x'] + kp['rshoulder']['x']) / 2,
+            'y': (kp['lshoulder']['y'] + kp['rshoulder']['y']) / 2
+        }
+    if kp.get('lhip') and kp.get('rhip'):
+        kp['midhip'] = {
+            'x': (kp['lhip']['x'] + kp['rhip']['x']) / 2,
+            'y': (kp['lhip']['y'] + kp['rhip']['y']) / 2
+        }
+    if 'nose' not in kp or len(kp) < 5:
         return None
-    
-    # Extract landmarks
-    landmarks = results.pose_landmarks.landmark
-    pose_data = {'source_file': str(image_path)}
-    
-    # Map MediaPipe landmarks to our format
-    for mp_idx, our_name in LANDMARK_MAPPING.items():
-        if mp_idx < len(landmarks):
-            lm = landmarks[mp_idx]
-            pose_data[f'x_{our_name}'] = lm.x * w  # Denormalize to pixel coords
-            pose_data[f'y_{our_name}'] = lm.y * h
-    
-    # Compute neck (midpoint of shoulders)
-    if 'x_lshoulder' in pose_data and 'x_rshoulder' in pose_data:
-        pose_data['x_neck'] = (pose_data['x_lshoulder'] + pose_data['x_rshoulder']) / 2
-        pose_data['y_neck'] = (pose_data['y_lshoulder'] + pose_data['y_rshoulder']) / 2
-    
-    # Compute midhip
-    if 'x_lhip' in pose_data and 'x_rhip' in pose_data:
-        pose_data['x_midhip'] = (pose_data['x_lhip'] + pose_data['x_rhip']) / 2
-        pose_data['y_midhip'] = (pose_data['y_lhip'] + pose_data['y_rhip']) / 2
-    
-    return pose_data
+    return kp
 
 
-def process_image_directory(input_dir: Path, brand_name: str = "unknown", 
-                           gender: str = "unknown") -> List[Dict]:
-    """
-    Process all images in a directory and extract poses.
-    
-    Args:
-        input_dir: Directory containing images
-        brand_name: Name of the brand/source
-        gender: Gender label for the images
-    
-    Returns:
-        List of pose dictionaries
-    """
+def extract_poses_from_video(
+    video_path: Path,
+    frame_interval: float = FRAME_INTERVAL,
+    skip_edges: float = SKIP_EDGE_SECONDS,
+) -> List[Dict[str, Any]]:
+    """Extract poses from video at frame_interval. Returns [{time, keypoints}, ...]."""
+    if not mp:
+        raise ImportError("mediapipe not installed. Run: pip install mediapipe")
+    video_path = Path(video_path)
+    if not video_path.exists():
+        raise FileNotFoundError(f"Video not found: {video_path}")
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open video: {video_path}")
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25
+    duration = cap.get(cv2.CAP_PROP_FRAME_COUNT) / fps if fps > 0 else 0
+    video_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    video_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    pose = mp.solutions.pose.Pose(
+        static_image_mode=False,
+        model_complexity=1,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5
+    )
+
     poses = []
-    image_extensions = {'.jpg', '.jpeg', '.png', '.webp', '.bmp'}
-    
-    image_files = [f for f in input_dir.iterdir() 
-                   if f.suffix.lower() in image_extensions]
-    
-    print(f"\nProcessing {len(image_files)} images from {input_dir}...")
-    
-    with mp_pose.Pose(
-        static_image_mode=True,
-        model_complexity=2,
-        enable_segmentation=False,
-        min_detection_confidence=0.5
-    ) as pose:
-        
-        for i, image_path in enumerate(image_files):
-            pose_data = extract_pose_from_image(image_path, pose)
-            
-            if pose_data:
-                pose_data['brand'] = brand_name
-                pose_data['gender'] = gender
-                poses.append(pose_data)
-            
-            if (i + 1) % 10 == 0:
-                print(f"  Processed {i + 1}/{len(image_files)} images...")
-    
-    print(f"  Successfully extracted {len(poses)} poses")
+    frame_idx = 0
+    last_t = -999
+    start_time = skip_edges
+    end_time = max(start_time + 0.5, duration - skip_edges)
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        t = frame_idx / fps if fps > 0 else frame_idx * frame_interval
+        if t < start_time or t > end_time:
+            frame_idx += 1
+            continue
+        if t - last_t < frame_interval - 0.01:
+            frame_idx += 1
+            continue
+
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = pose.process(rgb)
+        if results.pose_landmarks:
+            kp = _mp_to_keypoints(results.pose_landmarks.landmark, video_w, video_h)
+            if kp:
+                poses.append({'time': t, 'keypoints': kp})
+                last_t = t
+        frame_idx += 1
+
+    cap.release()
+    pose.close()
     return poses
 
 
-def normalize_poses(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Normalize poses to [0,1] scale and translate to midhip origin.
-    Matches the normalization from normalize.py
-    """
-    df_normalized = df.copy()
-    
-    x_cols = [col for col in df.columns if col.startswith('x_')]
-    y_cols = [col for col in df.columns if col.startswith('y_')]
-    
-    # Per-row normalization
-    for idx in df_normalized.index:
-        # Get current row values
-        row_x = df_normalized.loc[idx, x_cols].values.astype(float)
-        row_y = df_normalized.loc[idx, y_cols].values.astype(float)
-        
-        # Normalize to [0,1]
-        x_min, x_max = row_x.min(), row_x.max()
-        y_min, y_max = row_y.min(), row_y.max()
-        
-        width = x_max - x_min if x_max != x_min else 1
-        height = y_max - y_min if y_max != y_min else 1
-        
-        row_x_norm = (row_x - x_min) / width
-        row_y_norm = (row_y - y_min) / height
-        
-        # Translate to midhip origin
-        midhip_x = row_x_norm[x_cols.index('x_midhip')]
-        midhip_y = row_y_norm[y_cols.index('y_midhip')]
-        
-        df_normalized.loc[idx, x_cols] = row_x_norm - midhip_x
-        df_normalized.loc[idx, y_cols] = row_y_norm - midhip_y
-    
-    return df_normalized
+def extract_poses_from_image(image_path: Path) -> Optional[Dict[str, Dict[str, float]]]:
+    """Extract pose from single image. Returns {joint: {x,y}} or None."""
+    if not mp:
+        raise ImportError("mediapipe not installed. Run: pip install mediapipe")
+    image_path = Path(image_path)
+    if not image_path.exists():
+        raise FileNotFoundError(f"Image not found: {image_path}")
 
+    img = cv2.imread(str(image_path))
+    if img is None:
+        raise RuntimeError(f"Cannot read image: {image_path}")
+    img_h, img_w = img.shape[:2]
 
-def main():
-    parser = argparse.ArgumentParser(
-        description='Extract poses from brand images using MediaPipe'
+    pose = mp.solutions.pose.Pose(
+        static_image_mode=True,
+        model_complexity=1,
+        min_detection_confidence=0.5
     )
-    parser.add_argument('--input_dir', type=str, required=True,
-                       help='Directory containing images')
-    parser.add_argument('--output', type=str, default='brand_poses.csv',
-                       help='Output CSV file path')
-    parser.add_argument('--brand', type=str, default='unknown',
-                       help='Brand name for labeling')
-    parser.add_argument('--gender', type=str, default='unknown',
-                       help='Gender label (male/female/non-binary)')
-    parser.add_argument('--normalize', action='store_true',
-                       help='Apply normalization to poses')
-    
-    args = parser.parse_args()
-    
-    input_path = Path(args.input_dir)
-    if not input_path.exists():
-        print(f"Error: Input directory does not exist: {input_path}")
-        return
-    
-    # Process images
-    poses = process_image_directory(input_path, args.brand, args.gender)
-    
-    if not poses:
-        print("No poses were extracted!")
-        return
-    
-    # Create DataFrame
-    df = pd.DataFrame(poses)
-    
-    # Optionally normalize
-    if args.normalize:
-        print("\nApplying normalization...")
-        df = normalize_poses(df)
-    
-    # Save to CSV
-    output_path = Path(args.output)
-    df.to_csv(output_path, sep=';', index=False)
-    print(f"\nSaved {len(df)} poses to: {output_path}")
-    
-    # Print summary
-    print("\n" + "=" * 50)
-    print("EXTRACTION SUMMARY")
-    print("=" * 50)
-    print(f"Total images processed: {len(poses)}")
-    print(f"Brand: {args.brand}")
-    print(f"Gender: {args.gender}")
-    print(f"Columns: {list(df.columns)}")
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    results = pose.process(rgb)
+    pose.close()
 
-
-if __name__ == "__main__":
-    main()
+    if not results.pose_landmarks:
+        return None
+    return _mp_to_keypoints(results.pose_landmarks.landmark, img_w, img_h)
