@@ -28,6 +28,7 @@ export const KEYPOINT_NAMES = [
  * Normalize keypoints per paper Section 3.1.
  * Steps: (1) Bounding box, (2) Align bottom-left to (0,0), (3) Unit-length vector.
  * Returns {joint: {x,y}} or null if invalid.
+ * Note: Same formula as cluster_poses.py; MediaPipe [0,1] and CSV pixels both work.
  */
 export function normalizeKeypoints(kp) {
     if (!kp || Object.keys(kp).length === 0) return null;
@@ -57,6 +58,23 @@ export function normalizeKeypoints(kp) {
         }
     }
     return normalized;
+}
+
+/** Per-joint distances for debug/trace. Returns [{joint, distance}, ...] sorted by distance desc. */
+export function getPerJointDistances(pose1, pose2) {
+    if (!pose1 || !pose2) return [];
+    const norm1 = normalizeKeypoints(pose1);
+    const norm2 = normalizeKeypoints(pose2);
+    if (!norm1 || !norm2) return [];
+    const joints = [];
+    for (const name of KEYPOINT_NAMES) {
+        if (norm1[name] && norm2[name]) {
+            const dx = norm1[name].x - norm2[name].x;
+            const dy = norm1[name].y - norm2[name].y;
+            joints.push({ joint: name, distance: Math.sqrt(dx * dx + dy * dy) });
+        }
+    }
+    return joints.sort((a, b) => b.distance - a.distance);
 }
 
 /** Euclidean distance between two normalized poses (sum of squared differences over joints) */

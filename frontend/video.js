@@ -81,7 +81,7 @@ function landmarksToCanvasKeypoints(landmarks, canvas, videoW, videoH) {
     const kp = {};
     for (const name in LANDMARK_MAP) {
         const lm = landmarks[LANDMARK_MAP[name]];
-        if (lm) {
+        if (lm && (lm.visibility ?? 1) >= MIN_VISIBILITY) {
             kp[name] = { x: lm.x * drawW + offsetX, y: lm.y * drawH + offsetY };
         }
     }
@@ -94,11 +94,16 @@ function landmarksToCanvasKeypoints(landmarks, canvas, videoW, videoH) {
     return kp;
 }
 
+const MIN_VISIBILITY = 0.5;
+
 function landmarksToNormalizedKeypoints(landmarks) {
     const kp = {};
     for (const name in LANDMARK_MAP) {
         const lm = landmarks[LANDMARK_MAP[name]];
-        if (lm) kp[name] = { x: lm.x, y: lm.y };
+        if (lm) {
+            const vis = lm.visibility ?? 1;
+            if (vis >= MIN_VISIBILITY) kp[name] = { x: lm.x, y: lm.y };
+        }
     }
     if (kp.lshoulder && kp.rshoulder) {
         kp.neck = { x: (kp.lshoulder.x + kp.rshoulder.x) / 2, y: (kp.lshoulder.y + kp.rshoulder.y) / 2 };
@@ -244,6 +249,21 @@ function updateMatchingClusters() {
     container.innerHTML = getHowItWorksHTML();
 }
 
+function exportPosesAsJson() {
+    if (extractedPoses.length === 0) return;
+    const exportData = extractedPoses.map(p => ({
+        time: p.time,
+        frameIndex: p.frameIndex,
+        normalizedKeypoints: p.normalizedKeypoints || null
+    }));
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `poses_${new Date().toISOString().slice(0, 19).replace(/[:-]/g, '')}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+}
+
 function showPrediction() {
     const card = $('summaryCard');
     const content = $('summaryContent');
@@ -293,9 +313,12 @@ function renderPosesGallery() {
         const gc = m?.character || 'neutral';
         const label = gc === 'masculine' ? 'Masc' : gc === 'feminine' ? 'Fem' : 'Neut';
         const color = getGenderColor({ character: gc });
+        const frameSrc = p.frameDataUrl || '';
         return `
             <div class="pose-thumb ${i === currentPoseIndex ? 'active' : ''}" data-index="${i}">
-                <canvas id="pose${i}" width="100" height="100"></canvas>
+                <div class="pose-thumb-img">
+                    ${frameSrc ? `<img src="${frameSrc}" alt="Frame ${i}" width="100" height="100" />` : `<canvas id="pose${i}" width="100" height="100"></canvas>`}
+                </div>
                 <span class="pose-time">${formatTime(p.time)}</span>
                 <span class="pose-label" style="color:${color}">${label}</span>
             </div>
@@ -304,11 +327,13 @@ function renderPosesGallery() {
     
     setTimeout(() => {
         extractedPoses.forEach((p, i) => {
-            const canvas = $(`pose${i}`);
-            const m = getMatchForPose(p);
-            const gc = m?.character || 'neutral';
-            const color = getGenderColor({ character: gc });
-            if (canvas && p.normalizedKeypoints) drawMiniSkeleton(canvas, p.normalizedKeypoints, color);
+            if (!p.frameDataUrl && p.normalizedKeypoints) {
+                const canvas = container.querySelector(`#pose${i}`);
+                const m = getMatchForPose(p);
+                const gc = m?.character || 'neutral';
+                const color = getGenderColor({ character: gc });
+                if (canvas) drawMiniSkeleton(canvas, p.normalizedKeypoints, color);
+            }
         });
     }, 10);
     
@@ -446,16 +471,19 @@ async function processVideoInBackground(video) {
             const kp = landmarksToNormalizedKeypoints(landmarks);
             
             const match = findClosestCluster(POSE_CLUSTERS?.clusters, kp, matchK);
+            drawSkeleton(ctx, landmarksToCanvasKeypoints(landmarks, canvas, video.videoWidth, video.videoHeight));
+            const frameDataUrl = canvas.toDataURL('image/png');
+            
             extractedPoses.push({
                 time, frameIndex: i, landmarks,
                 normalizedKeypoints: normalizeKeypoints(kp),
                 cluster: match?.cluster || null,
                 character: match ? match.character : 'neutral',
                 malePercent: match?.malePercent || 0,
-                femalePercent: match?.femalePercent || 0
+                femalePercent: match?.femalePercent || 0,
+                frameDataUrl,
+                match
             });
-            
-            drawSkeleton(ctx, landmarksToCanvasKeypoints(landmarks, canvas, video.videoWidth, video.videoHeight));
         }
         
         const progress = ((i + 1) / totalFrames) * 100;
@@ -736,6 +764,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     $('playBtn').onclick = togglePlayback;
     $('prevPoseBtn').onclick = () => selectPose(currentPoseIndex - 1);
     $('nextPoseBtn').onclick = () => selectPose(currentPoseIndex + 1);
+    if ($('exportPosesBtn')) $('exportPosesBtn').onclick = exportPosesAsJson;
     
     document.addEventListener('keydown', (e) => {
         if (extractedPoses.length === 0) return;

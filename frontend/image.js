@@ -111,7 +111,7 @@ function updatePatternPanel(keypoints) {
                 <option value="2" ${matchK === 2 ? 'selected' : ''}>k=2</option>
                 <option value="3" ${matchK === 3 ? 'selected' : ''}>k=3</option>
                 <option value="4" ${matchK === 4 ? 'selected' : ''}>k=4</option>
-                <option value="5" ${matchK === 5 ? 'selected' : ''}>k=5 (weighted blend)</option>
+                <option value="5" ${matchK === 5 ? 'selected' : ''}>k=5</option>
             </select>
         </div>
         <div class="match-sections">
@@ -187,10 +187,11 @@ function convertLandmarks(landmarks, canvasW, canvasH, imgW, imgH) {
         lwrist: 15, rwrist: 16, lhip: 23, rhip: 24, lknee: 25, rknee: 26,
         lankle: 27, rankle: 28, bigtoe: 31, rbigtoe: 32
     };
+    const MIN_VISIBILITY = 0.5;
     const kp = {};
     for (const name in map) {
         const lm = landmarks[map[name]];
-        if (lm) kp[name] = { x: lm.x * w + offsetX, y: lm.y * h + offsetY };
+        if (lm && (lm.visibility ?? 1) >= MIN_VISIBILITY) kp[name] = { x: lm.x * w + offsetX, y: lm.y * h + offsetY };
     }
     if (kp.lshoulder && kp.rshoulder) {
         kp.neck = { x: (kp.lshoulder.x + kp.rshoulder.x) / 2, y: (kp.lshoulder.y + kp.rshoulder.y) / 2 };

@@ -3,7 +3,7 @@ Local HTTP server for Unveiling Digital Mirrors.
 Serves frontend/ (HTML, JS, CSS, data/) on http://localhost:8000.
 
 Usage:
-    python tool/serve.py
+    python scripts/serve.py
 Then open http://localhost:8000 in browser.
 """
 

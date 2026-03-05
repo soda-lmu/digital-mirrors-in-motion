@@ -503,9 +503,18 @@ body {
 .pose-thumb:hover { border-color: var(--primary); }
 .pose-thumb.active { border-color: var(--warning); background: var(--surface-light); }
 
-.pose-thumb canvas {
+.pose-thumb canvas,
+.pose-thumb .pose-thumb-img {
     display: block;
     margin-bottom: 5px;
+}
+
+.pose-thumb-img img {
+    display: block;
+    width: 100px;
+    height: 100px;
+    object-fit: cover;
+    border-radius: 4px;
 }
 
 .pose-time {
@@ -619,6 +628,8 @@ body {
 @media (max-width: 900px) {
     .match-grid { grid-template-columns: repeat(3, 1fr); }
 }
+
+
 
 /* =============================================================================
    CLUSTERS GRID

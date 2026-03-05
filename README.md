@@ -4,21 +4,20 @@ Web tool and dataset for analyzing body-pose patterns and gendered pose signatur
 
 ```bash
 # From repository root
-python tool/serve.py
+python scripts/serve.py
 # Open http://localhost:8000 in your browser
 ```
 
 What this repo contains
 
 - `frontend/` — UI (HTML, JS, CSS) and `frontend/data/pose_clusters.json` used by the interface
-- `tool/src/` — Python scripts for normalization, clustering, and pose extraction
-- `data/` — raw and normalized CSVs (normalized_poses.csv from normalize.py)
+- `scripts/` — Python scripts for clustering and pose extraction (paper-aligned normalization in cluster_poses.py)
 
 What the UI offers
 
-- Image mode: single-image pose detection; match to closest cluster (Euclidean distance on normalized pose vector).
-- Video mode: extract frames at 0.5s intervals; match each frame to closest cluster.
-- Patterns: browse 150 pose clusters, view prototypes and examples.
+- **Image mode**: single-image pose detection; match to closest cluster (Euclidean distance on normalized pose vector).
+- **Video mode**: extract poses at 0.5s intervals; gallery shows each frame with skeleton overlay; match each to closest cluster; Export downloads all poses as JSON (time, frameIndex, normalizedKeypoints).
+- **Patterns**: browse 150 pose clusters by gender category; click a cluster to see prototype and all member poses.
 
 Dataset summary
 
@@ -40,32 +39,31 @@ Key configuration (matches frontend code)
 
 Developer pipeline
 
-1. Normalize raw poses (optional; cluster_poses reads raw CSV directly):
+1. Cluster poses (k=150) and export frontend JSON:
 
 ```bash
-python tool/src/normalize.py
-```
-
-2. Cluster poses (k=150) and export frontend JSON:
-
-```bash
-python tool/src/cluster_poses.py
+python scripts/cluster_poses.py
 ```
 
 Key files
 
 - `frontend/data/pose_clusters.json` — cluster prototypes and gender stats (from cluster_poses.py)
 - `frontend/image.js`, `frontend/video.js` — pose detection (MediaPipe), normalization, cluster matching
+- `frontend/pose-utils.js` — shared normalization, distance, and matching logic
 - `frontend/patterns.html` — browse clusters by gender category
+- `scripts/cluster_poses.py` — clustering pipeline (paper-aligned normalization)
+- `scripts/mediapipe_pipeline.py` — optional Python MediaPipe extraction (browser uses client-side API)
 
 Pose extraction (MediaPipe)
 
 - Image and video analysis use MediaPipe for pose detection in the browser (client-side).
-- Run `python tool/serve.py` and open http://localhost:8000. No Python dependencies needed for the web app.
+- Landmarks with visibility < 0.5 are filtered out for matching.
+- Run `python scripts/serve.py` and open http://localhost:8000.
 
 Notes
 
 - Image/video: match pose to closest cluster by Euclidean distance. k=1 uses cluster character (multinomial test); k>1 blends top k clusters and classifies via deviation from null (paper-aligned).
+- Video Export: JSON contains only `time`, `frameIndex`, and `normalizedKeypoints` (paper-normalized coordinates) for each extracted pose.
 
 Citation
 

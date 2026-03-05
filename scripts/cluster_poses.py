@@ -240,7 +240,7 @@ def export_data(clusters_info, output_path):
 
 
 if __name__ == "__main__":
-    base_dir = Path(__file__).parent.parent.parent
+    base_dir = Path(__file__).parent.parent
     csv_path = base_dir / "Unveiling_digital_mirrors.csv"
     output_path = base_dir / "frontend" / "data" / "pose_clusters.json"
     
