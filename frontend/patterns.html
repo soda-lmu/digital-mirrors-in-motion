@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pose Database - Unveiling Digital Mirrors</title>
+    <title>Database - Unveiling Digital Mirrors</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body class="patterns-page">
@@ -12,14 +12,14 @@
             <div class="header-left">
                 <a href="index.html" class="home-link">🪞 Unveiling Digital Mirrors</a>
             </div>
-            <h1>📊 Pose Database</h1>
+            <h1>📊 Database</h1>
             <nav class="nav-links">
                 <a href="image.html">📷 Image</a>
                 <a href="video.html">🎬 Video</a>
             </nav>
         </header>
         
-<p class="page-description">Explore how poses are distributed across genders in media. Select a category to see poses that are predominantly used by that gender.</p>
+<p class="page-description">Explore how poses are distributed across genders. Select a category to see poses that are predominantly used by that gender.</p>
         
         <div class="gender-selector">
             <button class="gender-btn male" data-gender="male">
@@ -29,7 +29,7 @@
                 ♀️ Feminine Poses
             </button>
             <button class="gender-btn neutral" data-gender="neutral">
-                ⚖️ Neutral / Mixed Poses
+                ⚖️ Non-significant/Neutral Poses
             </button>
         </div>
         
@@ -64,114 +64,62 @@
         <div class="popup-content" id="popupContent"></div>
     </div>
     
-    <script>
+    <script type="module">
         /**
-         * PATTERNS PAGE — Browse 150 pose clusters by gender category
-         * Masculine/feminine = significant (p < 0.001/150) and over-represented vs null.
-         * Neutral = non-significant. Click cluster for prototype + all poses.
+         * PATTERNS PAGE — Browse 150 pose clusters by gender category.
+         *
+         * Filters clusters by statistical significance (chi-squared test):
+         *   - Masculine: significant clusters with male over-representation
+         *   - Feminine: significant clusters with female over-representation
+         *   - Neutral: non-significant clusters (no gender imbalance)
+         *
+         * Clicking a cluster opens a popup showing the prototype (average pose)
+         * and all individual poses in that cluster.
          */
+        import { 
+            BONES, 
+            drawMiniSkeleton, 
+            parsePoseClustersCSV,
+            parseNormalizedPosesCSV 
+        } from './pose-utils.js';
+
         let POSE_CLUSTERS = null;
+        let NORMALIZED_POSES = null;
         let currentGender = null;  // 'male' | 'female' | 'neutral'
 
-        /** Skeleton bones for drawing (matches video.js / image.js) */
-        const BONES = [
-            ['nose', 'neck'],
-            ['neck', 'rshoulder'], ['neck', 'lshoulder'],
-            ['rshoulder', 'relbow'], ['lshoulder', 'lelbow'],
-            ['relbow', 'rwrist'], ['lelbow', 'lwrist'],
-            ['neck', 'midhip'],
-            ['midhip', 'rhip'], ['midhip', 'lhip'],
-            ['rhip', 'rknee'], ['lhip', 'lknee'],
-            ['rknee', 'rankle'], ['lknee', 'lankle'],
-            ['rankle', 'rbigtoe'], ['lankle', 'bigtoe']
-        ];
-        
-        /** Load pose_clusters.json */
+        /** Load pose_clusters.csv and normalized_poses.csv */
         async function loadData() {
             try {
-                const clustersRes = await fetch('data/pose_clusters.json');
-                if (clustersRes.ok) POSE_CLUSTERS = await clustersRes.json();
+                const res = await fetch('/data/pose_clusters.csv');
+                if (res.ok) {
+                    const text = await res.text();
+                    POSE_CLUSTERS = { clusters: parsePoseClustersCSV(text) };
+                }
+                
+                const resPoses = await fetch('/data/normalized_poses.csv');
+                if (resPoses.ok) {
+                    const posesText = await resPoses.text();
+                    NORMALIZED_POSES = parseNormalizedPosesCSV(posesText);
+                }
             } catch (err) {
                 console.error('Error loading data:', err);
-            }
-        }
-        
-        /** Draw skeleton on canvas (scale to fit bounding box) */
-        function drawSkeleton(canvas, pose, color) {
-            if (!pose) return;
-            
-            const ctx = canvas.getContext('2d');
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            
-            let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
-            for (const name in pose) {
-                if (name === 'gender') continue;
-                if (pose[name]?.x !== undefined) {
-                    xMin = Math.min(xMin, pose[name].x);
-                    xMax = Math.max(xMax, pose[name].x);
-                    yMin = Math.min(yMin, pose[name].y);
-                    yMax = Math.max(yMax, pose[name].y);
-                }
-            }
-            const rangeX = xMax - xMin || 1, rangeY = yMax - yMin || 1;
-            const padding = 15;
-            const scale = Math.min(
-                (canvas.width - padding * 2) / rangeX,
-                (canvas.height - padding * 2) / rangeY
-            );
-            const offsetX = (canvas.width - (xMin + xMax) * scale) / 2;
-            const offsetY = (canvas.height - (yMin + yMax) * scale) / 2;
-            
-            const kp = {};
-            for (const name in pose) {
-                if (name === 'gender') continue;
-                if (pose[name] && typeof pose[name].x === 'number') {
-                    kp[name] = {
-                        x: pose[name].x * scale + offsetX,
-                        y: pose[name].y * scale + offsetY
-                    };
-                }
-            }
-            
-            // Draw bones
-            ctx.strokeStyle = color || '#f9e2af';
-            ctx.lineWidth = 2;
-            ctx.lineCap = 'round';
-            
-            for (const [start, end] of BONES) {
-                if (kp[start] && kp[end]) {
-                    ctx.beginPath();
-                    ctx.moveTo(kp[start].x, kp[start].y);
-                    ctx.lineTo(kp[end].x, kp[end].y);
-                    ctx.stroke();
-                }
-            }
-            
-            // Draw joints
-            for (const name in kp) {
-                const pt = kp[name];
-                ctx.beginPath();
-                ctx.arc(pt.x, pt.y, 2, 0, Math.PI * 2);
-                ctx.fillStyle = color || '#f9e2af';
-                ctx.fill();
             }
         }
         
         /** Filter clusters by gender: masculine/feminine (significant) or neutral (non-significant) */
         function getClustersByGender(gender) {
             if (!POSE_CLUSTERS) return [];
-            
             let filtered = [];
             
             if (gender === 'male') {
                 filtered = POSE_CLUSTERS.clusters.filter(c => c.significant && c.character === 'masculine');
                 filtered = filtered.map(c => ({ ...c, genderPercent: c.malePercent }));
-                filtered.sort((a, b) => b.malePercent - a.malePercent);
+                filtered.sort((a, b) => b.genderPercent - a.genderPercent);
             } 
             else if (gender === 'female') {
                 filtered = POSE_CLUSTERS.clusters.filter(c => c.significant && c.character === 'feminine');
                 filtered = filtered.map(c => ({ ...c, genderPercent: c.femalePercent }));
-                filtered.sort((a, b) => b.femalePercent - a.femalePercent);
+                filtered.sort((a, b) => b.genderPercent - a.genderPercent);
             }
             else if (gender === 'neutral') {
                 filtered = POSE_CLUSTERS.clusters.filter(c => !c.significant);
@@ -199,13 +147,13 @@
             note.style.display = 'block';
             
             if (gender === 'male') {
-                note.innerHTML = `<strong>📊 Significantly masculine poses (multinomial test)</strong><br>
+                note.innerHTML = `<strong>📊 Significantly Masculine Poses (multinomial test)</strong><br>
                     These ${clusterCount} pose categories have significantly more male representation than expected (p &lt; 0.001/150).`;
             } else if (gender === 'female') {
-                note.innerHTML = `<strong>📊 Significantly feminine poses (multinomial test)</strong><br>
+                note.innerHTML = `<strong>📊 Significantly Feminine Poses (multinomial test)</strong><br>
                     These ${clusterCount} pose categories have significantly more female representation than expected (p &lt; 0.001/150).`;
             } else {
-                note.innerHTML = `<strong>📊 Non-significant poses</strong><br>
+                note.innerHTML = `<strong>📊 Non-significant/Neutral Poses</strong><br>
                     These ${clusterCount} pose categories do not differ significantly from the expected gender distribution (52.46% F, 43.50% M, 4.04% NB).`;
             }
         }
@@ -273,7 +221,7 @@
                 return `
                     <div class="cluster-card" data-cluster="${c.id}">
                         <canvas id="cluster${c.id}" width="100" height="120"></canvas>
-                        <div class="cluster-id" style="color:${color};">#${c.id}</div>
+                        <div class="cluster-id" style="color:${color};">${c.id}</div>
                         <div class="cluster-stats">${stats}</div>
                         <div class="percentage-bar">
                             <div class="percentage-fill" style="width:${c.genderPercent}%;background:${color};"></div>
@@ -287,7 +235,7 @@
                 clusters.forEach(c => {
                     const canvas = document.getElementById(`cluster${c.id}`);
                     if (canvas && c.prototype) {
-                        drawSkeleton(canvas, c.prototype, color);
+                        drawMiniSkeleton(canvas, c.prototype, color);
                     }
                 });
             }, 50);
@@ -304,6 +252,8 @@
             if (!cluster) return;
             
             const color = getGenderColor(currentGender);
+            
+            const memberPoses = NORMALIZED_POSES ? NORMALIZED_POSES.filter(p => p.cluster_id === clusterId).slice(0, 100) : [];
             
             const popup = document.getElementById('popupContent');
             popup.innerHTML = `
@@ -324,8 +274,16 @@
                         <div style="color:${color};font-weight:bold;margin-top:5px;">PROTOTYPE (Average)</div>
                     </div>
                 </div>
-                <h4 style="margin-bottom:10px;">All ${cluster.size} poses in this cluster</h4>
-                <div id="popupAllPoses" class="all-poses-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(115px,1fr));gap:12px;max-height:450px;overflow-y:auto;padding:5px;"></div>
+                <h4 style="margin-bottom:10px;">Example Member Poses</h4>
+                <div class="pose-examples" id="memberPosesGrid">
+                    ${memberPoses.map((p, i) => `
+                        <div class="pose-example">
+                            <canvas id="popupPose${i}" width="100" height="120" style="border-color:${color};opacity:0.8;"></canvas>
+                            <div style="color:${color};font-size:0.8rem;margin-top:5px;opacity:0.8;">${p.gender}</div>
+                        </div>
+                    `).join('')}
+                    ${NORMALIZED_POSES && cluster.size > 100 ? `<div style="padding:20px;color:#a6adc8;">+ ${cluster.size - 100} more not shown</div>` : ''}
+                </div>
             `;
             
             document.getElementById('popupOverlay').style.display = 'flex';
@@ -333,25 +291,14 @@
             // Draw prototype
             setTimeout(() => {
                 if (cluster.prototype) {
-                    drawSkeleton(document.getElementById('popupProto'), cluster.prototype, color);
+                    drawMiniSkeleton(document.getElementById('popupProto'), cluster.prototype, color);
                 }
-            }, 50);
-            
-            // Render all poses in scrollable grid
-            const poses = cluster.poses || [];  // All poses in cluster (from cluster_poses.py)
-            const grid = document.getElementById('popupAllPoses');
-            grid.innerHTML = poses.map((p, i) => {
-                const g = p.gender || '';
-                const genderColor = g === 'male' ? '#89b4fa' : g === 'female' ? '#f5c2e7' : '#a6e3a1';
-                return `<div class="pose-example" style="text-align:center;">
-                    <canvas id="popupPose${i}" width="100" height="130" style="background:#313244;border-radius:8px;"></canvas>
-                    <div style="font-size:11px;color:${genderColor};margin-top:4px;">${g || '-'}</div>
-                </div>`;
-            }).join('');
-            setTimeout(() => {
-                poses.forEach((p, i) => {
+                
+                memberPoses.forEach((p, i) => {
                     const canvas = document.getElementById(`popupPose${i}`);
-                    if (canvas) drawSkeleton(canvas, p, '#cdd6f4');
+                    if (canvas && p.keypoints) {
+                        drawMiniSkeleton(canvas, p.keypoints, color);
+                    }
                 });
             }, 50);
             

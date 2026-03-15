@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <!-- Video Pose Analysis: upload video → extract poses every 0.5s → match to clusters -->
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,6 +9,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js"></script>
     <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
     <div class="app-container">
         <!-- Global Navigation -->
@@ -22,7 +24,7 @@
 
         <header class="page-header">
             <h1>🎬 Video Pose Analysis</h1>
-            <p class="page-subtitle">Extract poses frame-by-frame and predict overall gender expression</p>
+            <p class="page-subtitle">Upload a video to detect poses and analyze gender patterns</p>
         </header>
 
         <div class="video-layout">
@@ -32,14 +34,19 @@
                 <div class="upload-area">
                     <button id="uploadBtn" class="btn btn-primary btn-large">🎬 Upload Video</button>
                     <button id="clearBtn" class="btn" style="display: none;">🗑️ Clear</button>
-                    <input type="file" id="videoInput" accept="video/mp4,video/webm,video/quicktime,video/x-msvideo" hidden>
+                    <input type="file" id="videoInput" accept="video/mp4,video/webm,video/quicktime,video/x-msvideo"
+                        hidden>
+                    
+                    <select id="exampleSelect" class="btn" style="display: none; background: var(--surface); color: var(--light); border: 1px solid var(--surface-light); margin-left: 10px;">
+                        <option value="">🎬 Select from Examples</option>
+                    </select>
                 </div>
 
                 <!-- Upload Placeholder (shown initially) -->
                 <div id="uploadPlaceholder" class="upload-placeholder">
                     <div class="placeholder-content">
                         <span class="placeholder-icon">🎬</span>
-                        <p>Upload a video to analyze poses</p>
+                        <p>Upload a video to detect poses</p>
                         <p class="placeholder-hint">MP4, WebM, MOV • Max 30 seconds • Single person visible</p>
                     </div>
                 </div>
@@ -69,7 +76,7 @@
                         <canvas id="playbackCanvas" width="500" height="400"></canvas>
                         <video id="videoElement" hidden muted playsinline></video>
                     </div>
-                    
+
                     <div class="playback-controls">
                         <div class="playback-progress">
                             <div class="progress-bar" id="playbackProgressBar">
@@ -85,14 +92,13 @@
                     <!-- Extracted Poses Gallery -->
                     <div class="poses-gallery">
                         <div class="gallery-header">
-                            <h3>🎯 Extracted Poses</h3>
+                            <h3>Extracted Poses</h3>
                             <div class="gallery-nav">
                                 <button id="prevPoseBtn" class="btn btn-small">←</button>
                                 <span id="poseCounter">0 / 0</span>
                                 <button id="nextPoseBtn" class="btn btn-small">→</button>
-                                <button id="exportPosesBtn" class="btn btn-small">📥 Export</button>
+                                <button id="exportCsvBtn" class="btn btn-small">CSV</button>
                             </div>
-                            <span class="nav-hint">Use arrow keys to navigate</span>
                         </div>
                         <div id="posesContainer" class="poses-container">
                             <!-- Poses will be rendered here -->
@@ -113,7 +119,7 @@
                 <div class="card">
                     <h2>🎯 Current Pose</h2>
                     <div id="patternContent" class="pattern-content">
-                        <p class="placeholder-text">Upload a video to begin analysis</p>
+                        <p class="placeholder-text">Upload a video to see pose analysis</p>
                     </div>
                 </div>
 
@@ -124,10 +130,20 @@
                         <!-- Summary will appear here -->
                     </div>
                 </div>
+
+                <!-- Timeline Chart -->
+                <div id="timelineCard" class="card" style="display: none;">
+                    <h2>📈 Pose Timeline</h2>
+                    <p class="card-subtitle">Classification over time — each dot is one extracted frame</p>
+                    <div class="timeline-container">
+                        <canvas id="timelineCanvas"></canvas>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
 
     <script type="module" src="video.js"></script>
 </body>
+
 </html>

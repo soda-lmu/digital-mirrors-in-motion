@@ -1,45 +1,66 @@
 /**
  * VIDEO POSE ANALYSIS
  * ===================
- * Upload video → extract poses at 0.5s intervals (skip edges) → match each to clusters.
- * Gallery of extracted poses, playback with skeleton overlay, summary counts.
+ * Core logic for the video analysis page.
+ *
+ * Flow:
+ *   1. User uploads a video (max 30s).
+ *   2. We seek to each 0.5s mark, run MediaPipe Pose, store landmarks.
+ *   3. Each frame's landmarks are normalized and matched to the nearest
+ *      of 150 pose clusters (same pipeline as cluster_poses.py).
+ *   4. Results are shown as a gallery, playback with skeleton overlay,
+ *      summary counts (masculine/feminine/neutral), and a timeline chart.
+ *
+ * The first/last 2 seconds of the video are skipped to exclude
+ * intro/outro frames that rarely contain representative body poses.
  */
 
 import {
     BONES,
-    findClosestCluster,
-    getTopMatches,
+    findClosestPoses,
+    getTopMatchPoses,
     getGenderColor,
     drawMiniSkeleton,
     getHowItWorksHTML,
-    normalizeKeypoints
+    normalizeKeypoints,
+    parsePoseClustersCSV,
+    parseNormalizedPosesCSV
 } from './pose-utils.js';
+
+import { drawTimeline, exportCSV } from './timeline.js';
 
 // -----------------------------------------------------------------------------
 // GLOBAL STATE
 // -----------------------------------------------------------------------------
 
-let POSE_CLUSTERS = null;
-let mediapipePose = null;
-let mediapipeReady = false;
-let pendingCallback = null;
+// --- Global state ---
+// These track the current analysis session: loaded clusters, MediaPipe
+// model state, extracted poses, playback state, and UI selections.
 
-let extractedPoses = [];
-let currentPoseIndex = 0;
-let isProcessing = false;
-let isPlaying = false;
-let animationFrameId = null;
-let isCancelled = false;
-let lastPlaybackLandmarks = null;
-let playbackDetectionPending = false;
-let lastPlaybackDetectionTime = 0;
-const PLAYBACK_DETECTION_INTERVAL = 150;
-let matchK = 5;
+let POSE_CLUSTERS = null;              // 150 clusters from pose_clusters.csv
+let NORMALIZED_POSES = null;           // Loaded from normalized_poses.csv
+let mediapipePose = null;              // MediaPipe Pose model instance
+let mediapipeReady = false;            // True once the model is warmed up
+let pendingCallback = null;            // Callback for async MediaPipe results
+
+let extractedPoses = [];               // Array of detected poses from video
+let currentPoseIndex = 0;              // Currently selected pose in gallery
+let isProcessing = false;              // True while extracting frames
+let isPlaying = false;                 // True during video playback
+let animationFrameId = null;           // rAF handle for playback loop
+let isCancelled = false;               // User pressed cancel
+let lastPlaybackLandmarks = null;      // Most recent live-detected landmarks
+let playbackDetectionPending = false;  // Waiting for MediaPipe result
+let lastPlaybackDetectionTime = 0;     // Timestamp of last live detection
+const PLAYBACK_DETECTION_INTERVAL = 150; // ms between live detections
+
 
 const MAX_DURATION = 30;
 const FRAME_INTERVAL = 0.5;
-const SKIP_EDGE_SECONDS = 2;
 
+// MediaPipe landmark index → our 17-joint format.
+// Indices 31/32 = left/right foot index (closest to OpenPose big toe).
+// Neck and midhip are derived as midpoints (not in MediaPipe's 33 landmarks).
 const LANDMARK_MAP = {
     nose: 0, lshoulder: 11, rshoulder: 12, lelbow: 13, relbow: 14,
     lwrist: 15, rwrist: 16, lhip: 23, rhip: 24, lknee: 25, rknee: 26,
@@ -54,30 +75,48 @@ const $ = id => document.getElementById(id);
 
 async function loadData() {
     try {
-        const res = await fetch('data/pose_clusters.json');
-        if (res.ok) POSE_CLUSTERS = await res.json();
+        const res = await fetch('/data/pose_clusters.csv');
+        if (res.ok) {
+            const text = await res.text();
+            POSE_CLUSTERS = { clusters: parsePoseClustersCSV(text) };
+        }
+        const resPoses = await fetch('/data/normalized_poses.csv');
+        if (resPoses.ok) {
+            const text = await resPoses.text();
+            NORMALIZED_POSES = parseNormalizedPosesCSV(text);
+        }
     } catch (err) {
-        console.error('Error loading pose clusters:', err);
+        console.error('Error loading pose data:', err);
     }
 }
 
+/**
+ * Get the cluster match for a pose object (used by timeline and gallery).
+ * Converts raw MediaPipe landmarks → normalized keypoints → closest cluster.
+ */
 function getMatchForPose(pose) {
     if (!pose?.landmarks) return null;
     const kp = landmarksToNormalizedKeypoints(pose.landmarks);
-    return findClosestCluster(POSE_CLUSTERS?.clusters, kp, matchK);
+    return findClosestPoses(NORMALIZED_POSES, POSE_CLUSTERS?.clusters, kp);
 }
 
 // -----------------------------------------------------------------------------
 // COORDINATE CONVERSION
 // -----------------------------------------------------------------------------
 
+/**
+ * Convert raw MediaPipe landmarks to canvas pixel coordinates.
+ * This is for DRAWING the skeleton overlay on the video canvas.
+ * Also derives neck (midpoint of shoulders) and midhip (midpoint of hips)
+ * since MediaPipe doesn't output these directly.
+ */
 function landmarksToCanvasKeypoints(landmarks, canvas, videoW, videoH) {
     const scale = Math.min(canvas.width / videoW, canvas.height / videoH);
     const drawW = videoW * scale;
     const drawH = videoH * scale;
     const offsetX = (canvas.width - drawW) / 2;
     const offsetY = (canvas.height - drawH) / 2;
-    
+
     const kp = {};
     for (const name in LANDMARK_MAP) {
         const lm = landmarks[LANDMARK_MAP[name]];
@@ -85,6 +124,7 @@ function landmarksToCanvasKeypoints(landmarks, canvas, videoW, videoH) {
             kp[name] = { x: lm.x * drawW + offsetX, y: lm.y * drawH + offsetY };
         }
     }
+    // Derive neck and midhip (not in MediaPipe's 33 landmarks)
     if (kp.lshoulder && kp.rshoulder) {
         kp.neck = { x: (kp.lshoulder.x + kp.rshoulder.x) / 2, y: (kp.lshoulder.y + kp.rshoulder.y) / 2 };
     }
@@ -96,6 +136,11 @@ function landmarksToCanvasKeypoints(landmarks, canvas, videoW, videoH) {
 
 const MIN_VISIBILITY = 0.5;
 
+/**
+ * Convert raw MediaPipe landmarks to normalized [0,1] keypoints.
+ * This is for CLUSTER MATCHING (not drawing). Uses MediaPipe's native
+ * normalized coordinates (0-1 range), no pixel conversion needed.
+ */
 function landmarksToNormalizedKeypoints(landmarks) {
     const kp = {};
     for (const name in LANDMARK_MAP) {
@@ -105,6 +150,7 @@ function landmarksToNormalizedKeypoints(landmarks) {
             if (vis >= MIN_VISIBILITY) kp[name] = { x: lm.x, y: lm.y };
         }
     }
+    // Derive neck and midhip
     if (kp.lshoulder && kp.rshoulder) {
         kp.neck = { x: (kp.lshoulder.x + kp.rshoulder.x) / 2, y: (kp.lshoulder.y + kp.rshoulder.y) / 2 };
     }
@@ -125,7 +171,7 @@ function drawVideoFrame(ctx, video) {
     const h = video.videoHeight * scale;
     const x = (canvas.width - w) / 2;
     const y = (canvas.height - h) / 2;
-    
+
     ctx.fillStyle = '#1e1e2e';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(video, x, y, w, h);
@@ -168,78 +214,66 @@ function formatTime(s) {
 function updatePatternPanel(keypoints) {
     const container = $('patternContent');
     if (!container) return;
-    if (!keypoints) {
-        container.innerHTML = '<p class="placeholder-text">Upload a video to begin</p>';
+    if (!keypoints || !NORMALIZED_POSES || !POSE_CLUSTERS?.clusters) {
+        container.innerHTML = '<p class="placeholder-text">Analyzing pose...</p>';
         return;
     }
     const clusters = POSE_CLUSTERS?.clusters;
-    const match = findClosestCluster(clusters, keypoints, matchK);
-    const topMatches = getTopMatches(clusters, keypoints, matchK);
+    const match = findClosestPoses(NORMALIZED_POSES, clusters, keypoints);
+    const topMatches = getTopMatchPoses(NORMALIZED_POSES, clusters, keypoints);
     if (!match) {
         container.innerHTML = '<p class="placeholder-text">No pose match</p>';
         return;
     }
-    const kTitle = matchK === 1 ? 'Best match (k=1)' : `Weighted blend (k=${matchK})`;
-    const kExplanation = matchK === 1
-        ? 'Single closest cluster. Uses cluster character from multinomial test (paper-aligned).'
-        : `Blended from ${matchK} nearest clusters. Closer = more influence.`;
+
+    const primaryCluster = topMatches[0].cluster;
+    const primaryPose = topMatches[0].pose;
     const label = match.character === 'masculine' ? 'Masculine-associated' : match.character === 'feminine' ? 'Feminine-associated' : 'Neutral';
     const malePct = match.malePercent.toFixed(0);
     const femalePct = match.femalePercent.toFixed(0);
+
     container.innerHTML = `
-        <div class="k-selector-row">
-            <label>Use for gallery & summary:</label>
-            <select id="matchKSelect">
-                <option value="1" ${matchK === 1 ? 'selected' : ''}>k=1 (best match)</option>
-                <option value="2" ${matchK === 2 ? 'selected' : ''}>k=2</option>
-                <option value="3" ${matchK === 3 ? 'selected' : ''}>k=3</option>
-                <option value="4" ${matchK === 4 ? 'selected' : ''}>k=4</option>
-                <option value="5" ${matchK === 5 ? 'selected' : ''}>k=5 (weighted blend)</option>
-            </select>
-        </div>
         <div class="match-sections">
             <div class="match-section">
-                <h4 class="match-section-title">${kTitle}</h4>
+                <h4 class="match-section-title">Best Match Prediction</h4>
                 <div class="result-label">${label}</div>
                 <div class="result-bars">
                     <div class="result-bar"><span>Male</span> <span>${malePct}%</span></div>
                     <div class="bar-track"><div class="bar-segment male" style="width:${malePct}%"></div><div class="bar-segment female" style="width:${femalePct}%"></div></div>
                     <div class="result-bar"><span>Female</span> <span>${femalePct}%</span></div>
                 </div>
-                <p class="result-explanation">${kExplanation}</p>
             </div>
         </div>
         <div class="matched-categories">
-            <h4>Top ${matchK} matched categories:</h4>
-            <div class="match-grid">
-                ${topMatches.map((m, i) => `
-                    <div class="match-card">
-                        <canvas id="matchCanvas${i}" width="60" height="75"></canvas>
-                        <div class="match-info">
-                            <span>#${m.cluster.id}</span>
-                            <span class="match-sim">${m.similarity}% similar</span>
-                            <span class="match-stats">${m.cluster.malePercent.toFixed(0)}%M / ${m.cluster.femalePercent.toFixed(0)}%F</span>
-                        </div>
+            <h4>Matched Pose Instance:</h4>
+            <div class="match-grid" style="display: flex; gap: 1rem; align-items: stretch;">
+                <div class="match-card" style="flex: 1; min-width: 0; background-color: var(--surface0); display: flex; flex-direction: column; align-items: center; padding: 0.5rem; border-radius: 8px;">
+                    <canvas id="matchCanvasProto" width="80" height="100"></canvas>
+                    <div class="match-info" style="text-align: center; margin-top: 0.5rem;">
+                        <span style="display: block; font-weight: 600; font-size: 1.1em;">#${primaryCluster.id} (Prototype)</span>
+                        <span class="match-stats" style="display: block;">${primaryCluster.malePercent.toFixed(0)}%M / ${primaryCluster.femalePercent.toFixed(0)}%F</span>
                     </div>
-                `).join('')}
+                </div>
+                <div class="match-card" style="flex: 1; min-width: 0; background-color: var(--surface0); display: flex; flex-direction: column; align-items: center; padding: 0.5rem; border-radius: 8px;">
+                    <canvas id="matchCanvasPose" width="80" height="100"></canvas>
+                    <div class="match-info" style="text-align: center; margin-top: 0.5rem;">
+                        <span style="display: block; font-weight: 600; font-size: 1.1em;">Dataset Pose</span>
+                        <span class="match-stats" style="display: block;">Labeled: ${primaryPose.gender}</span>
+                    </div>
+                </div>
             </div>
         </div>
     `;
-    
-    $('matchKSelect').onchange = () => {
-        matchK = parseInt($('matchKSelect').value, 10);
-        renderPosesGallery();
-        showPrediction();
-        const pose = extractedPoses[currentPoseIndex];
-        if (pose?.landmarks) updatePatternPanel(landmarksToNormalizedKeypoints(pose.landmarks));
-    };
+
     setTimeout(() => {
-        topMatches.forEach((m, i) => {
-            const canvas = $(`matchCanvas${i}`);
-            if (canvas && m.cluster.prototype) {
-                drawMiniSkeleton(canvas, m.cluster.prototype, getGenderColor(m.cluster));
-            }
-        });
+        const canvasProto = $('matchCanvasProto');
+        const canvasPose = $('matchCanvasPose');
+        if (canvasProto && primaryCluster.prototype) {
+            drawMiniSkeleton(canvasProto, primaryCluster.prototype, getGenderColor(primaryCluster));
+        }
+        if (canvasPose && primaryPose.keypoints) {
+            drawMiniSkeleton(canvasPose, primaryPose.keypoints, getGenderColor(primaryCluster));
+        }
     }, 10);
 }
 
@@ -249,28 +283,15 @@ function updateMatchingClusters() {
     container.innerHTML = getHowItWorksHTML();
 }
 
-function exportPosesAsJson() {
-    if (extractedPoses.length === 0) return;
-    const exportData = extractedPoses.map(p => ({
-        time: p.time,
-        frameIndex: p.frameIndex,
-        normalizedKeypoints: p.normalizedKeypoints || null
-    }));
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `poses_${new Date().toISOString().slice(0, 19).replace(/[:-]/g, '')}.json`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-}
+
 
 function showPrediction() {
     const card = $('summaryCard');
     const content = $('summaryContent');
     if (extractedPoses.length === 0 || !card || !content) return;
-    
+
     let mascCount = 0, femCount = 0, neutCount = 0;
-    
+
     extractedPoses.forEach(p => {
         const m = getMatchForPose(p);
         const gc = m?.character || 'neutral';
@@ -278,9 +299,9 @@ function showPrediction() {
         else if (gc === 'feminine') femCount++;
         else neutCount++;
     });
-    
+
     const total = extractedPoses.length;
-    
+
     card.style.display = 'block';
     content.innerHTML = `
         <div class="summary-header">
@@ -307,7 +328,7 @@ function showPrediction() {
 function renderPosesGallery() {
     const container = $('posesContainer');
     if (!container) return;
-    
+
     container.innerHTML = extractedPoses.map((p, i) => {
         const m = getMatchForPose(p);
         const gc = m?.character || 'neutral';
@@ -324,7 +345,7 @@ function renderPosesGallery() {
             </div>
         `;
     }).join('');
-    
+
     setTimeout(() => {
         extractedPoses.forEach((p, i) => {
             if (!p.frameDataUrl && p.normalizedKeypoints) {
@@ -336,26 +357,26 @@ function renderPosesGallery() {
             }
         });
     }, 10);
-    
+
     container.querySelectorAll('.pose-thumb').forEach(el => {
         el.onclick = () => selectPose(parseInt(el.dataset.index));
     });
-    
+
     $('poseCounter').textContent = `${currentPoseIndex + 1} / ${extractedPoses.length}`;
 }
 
 function selectPose(index) {
     if (index < 0 || index >= extractedPoses.length) return;
     currentPoseIndex = index;
-    
+
     document.querySelectorAll('.pose-thumb').forEach((el, i) => el.classList.toggle('active', i === index));
     $('poseCounter').textContent = `${index + 1} / ${extractedPoses.length}`;
-    
+
     const pose = extractedPoses[index];
     const video = $('videoElement');
     const canvas = $('playbackCanvas');
     const ctx = canvas.getContext('2d');
-    
+
     video.currentTime = pose.time;
     video.onseeked = () => {
         video.onseeked = null;
@@ -365,12 +386,15 @@ function selectPose(index) {
         }
         updatePlaybackUI();
     };
-    
+
     if (pose.landmarks) {
         const kp = landmarksToNormalizedKeypoints(pose.landmarks);
         updatePatternPanel(kp);
     }
-    
+
+    // Update timeline highlight
+    drawTimeline($('timelineCanvas'), extractedPoses, getMatchForPose, index);
+
     const thumb = document.querySelector(`.pose-thumb[data-index="${index}"]`);
     if (thumb) thumb.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
 }
@@ -411,19 +435,19 @@ async function initMediaPipe() {
 
 async function detectPose(videoElement) {
     if (isCancelled || !videoElement.videoWidth || !videoElement.videoHeight) return null;
-    
+
     return new Promise((resolve) => {
         const timeout = setTimeout(() => { pendingCallback = null; resolve(null); }, 5000);
         const canvas = document.createElement('canvas');
         canvas.width = videoElement.videoWidth;
         canvas.height = videoElement.videoHeight;
         canvas.getContext('2d').drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-        
+
         pendingCallback = (results) => {
             clearTimeout(timeout);
             resolve(isCancelled ? null : results);
         };
-        
+
         mediapipePose.send({ image: canvas }).catch(() => { clearTimeout(timeout); pendingCallback = null; resolve(null); });
     });
 }
@@ -436,22 +460,22 @@ async function processVideoInBackground(video) {
     isProcessing = true;
     isCancelled = false;
     extractedPoses = [];
-    
+
     const canvas = $('processingCanvas');
     const ctx = canvas.getContext('2d');
-    
+
     if (video.readyState < 2) {
         await new Promise(resolve => { video.onloadeddata = resolve; setTimeout(resolve, 2000); });
     }
-    
-    const startTime = SKIP_EDGE_SECONDS;
-    const endTime = Math.max(startTime + 0.5, video.duration - SKIP_EDGE_SECONDS);
+
+    const startTime = 0;
+    const endTime = video.duration;
     const totalFrames = Math.floor((endTime - startTime) / FRAME_INTERVAL) + 1;
     $('processingText').textContent = 'Extracting poses...';
-    
+
     for (let i = 0; i < totalFrames && isProcessing && !isCancelled; i++) {
         const time = startTime + (i * FRAME_INTERVAL);
-        
+
         await new Promise(resolve => {
             if (isCancelled) { resolve(); return; }
             const onSeeked = () => { video.removeEventListener('seeked', onSeeked); setTimeout(resolve, 100); };
@@ -459,21 +483,21 @@ async function processVideoInBackground(video) {
             video.currentTime = time;
             setTimeout(() => { video.removeEventListener('seeked', onSeeked); resolve(); }, 500);
         });
-        
+
         if (isCancelled) break;
         drawVideoFrame(ctx, video);
-        
+
         const result = await detectPose(video);
         if (isCancelled) break;
-        
+
         if (result?.poseLandmarks) {
             const landmarks = result.poseLandmarks.map(lm => ({ x: lm.x, y: lm.y, z: lm.z, visibility: lm.visibility }));
             const kp = landmarksToNormalizedKeypoints(landmarks);
-            
-            const match = findClosestCluster(POSE_CLUSTERS?.clusters, kp, matchK);
+
+            const match = findClosestPoses(NORMALIZED_POSES, POSE_CLUSTERS?.clusters, kp);
             drawSkeleton(ctx, landmarksToCanvasKeypoints(landmarks, canvas, video.videoWidth, video.videoHeight));
             const frameDataUrl = canvas.toDataURL('image/png');
-            
+
             extractedPoses.push({
                 time, frameIndex: i, landmarks,
                 normalizedKeypoints: normalizeKeypoints(kp),
@@ -485,13 +509,13 @@ async function processVideoInBackground(video) {
                 match
             });
         }
-        
+
         const progress = ((i + 1) / totalFrames) * 100;
         $('progressFill').style.width = `${progress}%`;
         $('progressText').textContent = `${progress.toFixed(0)}%`;
         $('processingText').textContent = `Extracting poses... (${extractedPoses.length} found)`;
     }
-    
+
     isProcessing = false;
     return !isCancelled && extractedPoses.length > 0;
 }
@@ -535,12 +559,12 @@ function startPlayback() {
     const video = $('videoElement');
     const canvas = $('playbackCanvas');
     const ctx = canvas.getContext('2d');
-    
+
     if (!video.src || extractedPoses.length === 0) return;
-    
+
     lastPlaybackLandmarks = null;
     lastPlaybackDetectionTime = 0;
-    
+
     const doPlay = () => {
         isPlaying = true;
         $('playBtn').textContent = '⏸ Pause';
@@ -573,7 +597,7 @@ function startPlayback() {
         }
         render();
     };
-    
+
     if (video.ended) {
         video.currentTime = 0;
         video.onseeked = () => { video.onseeked = null; doPlay(); };
@@ -625,28 +649,29 @@ async function handleVideoUpload(file) {
     playbackDetectionPending = false;
     extractedPoses = [];
     currentPoseIndex = 0;
-    
+
     if (animationFrameId) {
         cancelAnimationFrame(animationFrameId);
         animationFrameId = null;
     }
-    
+
     $('uploadPlaceholder').style.display = 'none';
     $('processingSection').style.display = 'block';
     $('resultsSection').style.display = 'none';
     $('summaryCard').style.display = 'none';
+    $('timelineCard').style.display = 'none';
     $('clearBtn').style.display = 'inline-block';
-    
+
     $('progressFill').style.width = '0%';
     $('progressText').textContent = '0%';
     $('processingText').textContent = 'Loading video...';
-    
+
     const video = $('videoElement');
     if (video.src?.startsWith('blob:')) {
         URL.revokeObjectURL(video.src);
     }
     video.src = URL.createObjectURL(file);
-    
+
     try {
         await new Promise((resolve, reject) => {
             video.onloadedmetadata = resolve;
@@ -662,22 +687,22 @@ async function handleVideoUpload(file) {
         resetToUpload();
         return;
     }
-    
+
     if (video.duration > MAX_DURATION) {
         alert(`Video too long (${video.duration.toFixed(0)}s). Max ${MAX_DURATION}s allowed.`);
         resetToUpload();
         return;
     }
-    
+
     if (isCancelled) return;
-    
+
     $('processingText').textContent = 'Loading model...';
     if (!mediapipeReady) await initMediaPipe();
     if (isCancelled) return;
-    
+
     const success = await processVideoInBackground(video);
     if (isCancelled) return;
-    
+
     if (!success) {
         alert('No poses detected. Try a video with a visible person.');
         resetToUpload();
@@ -691,11 +716,11 @@ function showResults() {
     $('processingSection').style.display = 'none';
     $('resultsSection').style.display = 'block';
     $('clearBtn').style.display = 'inline-block';
-    
+
     const video = $('videoElement');
     const canvas = $('playbackCanvas');
     const ctx = canvas.getContext('2d');
-    
+
     const startTime = extractedPoses[0]?.time ?? 0;
     video.currentTime = startTime;
     video.onseeked = () => {
@@ -710,12 +735,16 @@ function showResults() {
     currentPoseIndex = 0;
     renderPosesGallery();
     showPrediction();
-    
+
     if (extractedPoses[0]?.landmarks) {
         const kp = landmarksToNormalizedKeypoints(extractedPoses[0].landmarks);
         updatePatternPanel(kp);
     }
     updateMatchingClusters();
+
+    // Timeline chart
+    $('timelineCard').style.display = 'block';
+    drawTimeline($('timelineCanvas'), extractedPoses, getMatchForPose, 0);
 }
 
 function resetToUpload() {
@@ -725,26 +754,27 @@ function resetToUpload() {
     pendingCallback = null;
     extractedPoses = [];
     currentPoseIndex = 0;
-    
+
     if (animationFrameId) { cancelAnimationFrame(animationFrameId); animationFrameId = null; }
-    
+
     const video = $('videoElement');
     video.pause();
     video.onseeked = video.onloadeddata = video.onloadedmetadata = null;
     if (video.src?.startsWith('blob:')) URL.revokeObjectURL(video.src);
     video.src = '';
     video.load();
-    
+
     $('uploadPlaceholder').style.display = 'flex';
     $('processingSection').style.display = 'none';
     $('resultsSection').style.display = 'none';
     $('summaryCard').style.display = 'none';
+    $('timelineCard').style.display = 'none';
     $('clearBtn').style.display = 'none';
     $('videoInput').value = '';
-    
+
     updatePatternPanel(null);
     updateMatchingClusters();
-    
+
     setTimeout(() => { isCancelled = false; }, 100);
 }
 
@@ -756,23 +786,48 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadData();
     await initMediaPipe();
     updateMatchingClusters();
-    
+
     $('uploadBtn').onclick = () => $('videoInput').click();
     $('videoInput').onchange = (e) => { if (e.target.files[0]) handleVideoUpload(e.target.files[0]); };
+    
+    // Simple Example Selection
+    (async () => {
+        try {
+            const res = await fetch('/api/list?type=videos');
+            const files = await res.json();
+            if (files?.length) {
+                const select = $('exampleSelect');
+                select.style.display = 'inline-block';
+                files.forEach(f => {
+                    const opt = document.createElement('option');
+                    opt.value = opt.textContent = f;
+                    select.appendChild(opt);
+                });
+                select.onchange = async () => {
+                    if (!select.value) return;
+                    const res = await fetch(`/data/videos/${select.value}`);
+                    const blob = await res.blob();
+                    handleVideoUpload(new File([blob], select.value, { type: blob.type }));
+                    select.value = "";
+                };
+            }
+        } catch (e) { console.error('Examples failed', e); }
+    })();
+
     $('cancelBtn').onclick = () => { isProcessing = false; resetToUpload(); };
     $('clearBtn').onclick = resetToUpload;
     $('playBtn').onclick = togglePlayback;
     $('prevPoseBtn').onclick = () => selectPose(currentPoseIndex - 1);
     $('nextPoseBtn').onclick = () => selectPose(currentPoseIndex + 1);
-    if ($('exportPosesBtn')) $('exportPosesBtn').onclick = exportPosesAsJson;
-    
+    if ($('exportCsvBtn')) $('exportCsvBtn').onclick = () => exportCSV(extractedPoses, getMatchForPose);
+
     document.addEventListener('keydown', (e) => {
         if (extractedPoses.length === 0) return;
         if (e.key === 'ArrowLeft') { e.preventDefault(); selectPose(currentPoseIndex - 1); }
         if (e.key === 'ArrowRight') { e.preventDefault(); selectPose(currentPoseIndex + 1); }
         if (e.key === ' ') { e.preventDefault(); togglePlayback(); }
     });
-    
+
     $('playbackProgressBar').onclick = (e) => {
         const video = $('videoElement');
         if (!video.duration) return;
@@ -784,6 +839,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (!isPlaying) drawCurrentFrameWithSkeleton();
         };
     };
-    
+
     $('videoElement').onended = stopPlayback;
 });

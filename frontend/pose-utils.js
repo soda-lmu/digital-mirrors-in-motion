@@ -1,12 +1,24 @@
 /**
- * Shared pose analysis utilities (Tsolak & Kühne, 2025)
- * =====================================================
- * Used by image.js and video.js for normalization, cluster matching, and display.
- * Methodology: "Unveiling digital mirrors: Decoding gendered body poses in Instagram imagery"
- * (Computers in Human Behavior 163, 2025).
+ * Shared Pose Analysis Utilities
+ * ==============================
+ * Core library used by image.js and video.js.
+ *
+ * This file implements the client-side version of the same normalization
+ * and matching pipeline used in cluster_poses.py (Python backend).
+ *
+ * Pipeline: Raw keypoints → Normalize (bounding box → origin → unit vector)
+ *           → Euclidean distance to 150 cluster prototypes → Nearest match
+ *
+ * Based on: Tsolak & Kühne (2025), "Unveiling digital mirrors: Decoding
+ * gendered body poses in Instagram imagery", CHB 163.
  */
 
-/** Skeleton bones for drawing — 17 joints per paper (nose, neck, limbs, ankles, big toes) */
+/**
+ * Skeleton bones for stick-figure drawing.
+ * Each pair [start, end] is a line segment connecting two joints.
+ * The 17-joint set matches the paper (Section 3.1): nose, neck, shoulders,
+ * elbows, wrists, midhip, hips, knees, ankles, and big toes.
+ */
 export const BONES = [
     ['nose', 'neck'], ['neck', 'rshoulder'], ['neck', 'lshoulder'],
     ['rshoulder', 'relbow'], ['lshoulder', 'lelbow'],
@@ -17,7 +29,13 @@ export const BONES = [
     ['rankle', 'rbigtoe'], ['lankle', 'bigtoe']
 ];
 
-/** Joint names in fixed order — must match cluster_poses.py JOINTS */
+/**
+ * Joint names in fixed order — MUST match cluster_poses.py JOINTS.
+ * The order matters because we flatten (x, y) pairs into a 1-D vector:
+ * [x_nose, x_neck, ..., y_nose, y_neck, ...]
+ * If the order differs between frontend and backend, distance calculations
+ * will be meaningless.
+ */
 export const KEYPOINT_NAMES = [
     'nose', 'neck', 'lshoulder', 'rshoulder', 'lelbow', 'relbow',
     'lwrist', 'rwrist', 'midhip', 'lhip', 'rhip', 'lknee', 'rknee',
@@ -26,12 +44,25 @@ export const KEYPOINT_NAMES = [
 
 /**
  * Normalize keypoints per paper Section 3.1.
- * Steps: (1) Bounding box, (2) Align bottom-left to (0,0), (3) Unit-length vector.
- * Returns {joint: {x,y}} or null if invalid.
- * Note: Same formula as cluster_poses.py; MediaPipe [0,1] and CSV pixels both work.
+ *
+ * This is the JavaScript equivalent of normalize_poses() in cluster_poses.py.
+ * Both MUST produce identical output for the same input, otherwise cluster
+ * matching will be inaccurate.
+ *
+ * Steps:
+ *   1. Collect x/y values for all detected joints (in KEYPOINT_NAMES order).
+ *   2. Bounding-box shift: bottom-left = (x_min, y_max) becomes (0, 0).
+ *      (In image coordinates y increases downward, so "bottom" = max y.)
+ *   3. Flatten to a 1-D vector [x'_0, y'_0, x'_1, y'_1, ...].
+ *   4. Normalize to unit length (L2 norm = 1).
+ *
+ * @param {Object} kp - {joint_name: {x, y}} for detected joints
+ * @returns {Object|null} Normalized {joint_name: {x, y}} or null if invalid
  */
 export function normalizeKeypoints(kp) {
     if (!kp || Object.keys(kp).length === 0) return null;
+
+    // Step 1: collect raw coordinates
     const xs = [], ys = [];
     for (const name of KEYPOINT_NAMES) {
         if (kp[name]?.x !== undefined && kp[name]?.y !== undefined) {
@@ -40,21 +71,37 @@ export function normalizeKeypoints(kp) {
         }
     }
     if (xs.length === 0) return null;
+
+    // Step 2: bounding-box shift (bottom-left → origin)
     const xMin = Math.min(...xs), yMax = Math.max(...ys);
-    const vec = [];
+
+    // Step 3: flatten to vector [x0, x1, ..., y0, y1, ...]
+    // Must match cluster_poses.py normalize_poses() logic.
+    // We include all 17 joints in the vector; missing ones are 0 (at origin).
+    const vecX = [], vecY = [];
     for (const name of KEYPOINT_NAMES) {
         if (kp[name]) {
-            vec.push(kp[name].x - xMin, kp[name].y - yMax);
+            vecX.push(kp[name].x - xMin);
+            vecY.push(kp[name].y - yMax);
+        } else {
+            vecX.push(0);
+            vecY.push(0);
         }
     }
+    const vec = [...vecX, ...vecY];
+
+    // Step 4: unit-length normalization
     const norm = Math.hypot(...vec);
     if (norm < 1e-10) return null;
+
     const normalized = {};
-    let i = 0;
-    for (const name of KEYPOINT_NAMES) {
+    for (let i = 0; i < KEYPOINT_NAMES.length; i++) {
+        const name = KEYPOINT_NAMES[i];
         if (kp[name]) {
-            normalized[name] = { x: vec[i] / norm, y: vec[i + 1] / norm };
-            i += 2;
+            normalized[name] = {
+                x: vec[i] / norm,
+                y: vec[i + KEYPOINT_NAMES.length] / norm
+            };
         }
     }
     return normalized;
@@ -77,7 +124,11 @@ export function getPerJointDistances(pose1, pose2) {
     return joints.sort((a, b) => b.distance - a.distance);
 }
 
-/** Euclidean distance between two normalized poses (sum of squared differences over joints) */
+/**
+ * Euclidean distance between two normalized poses.
+ * This is the core metric used for cluster matching (paper Section 3.3).
+ * Sums squared differences over all joints present in BOTH poses.
+ */
 export function poseDistance(pose1, pose2) {
     if (!pose1 || !pose2) return Infinity;
     let sumSq = 0, count = 0;
@@ -92,98 +143,90 @@ export function poseDistance(pose1, pose2) {
     return count > 0 ? Math.sqrt(sumSq) : Infinity;
 }
 
-/** Return top k clusters by distance, with similarity score (0–100) */
-export function getTopMatches(clusters, keypoints, k = 5) {
-    if (!clusters || !keypoints) return [];
+/** Return the best matching pose by distance, with similarity score (0–100) */
+export function getTopMatchPoses(poses, clusters, keypoints) {
+    if (!poses || !clusters || !keypoints) return [];
     const normalizedPose = normalizeKeypoints(keypoints);
     if (!normalizedPose) return [];
-    return clusters
-        .filter(c => c.prototype)
-        .map(cluster => ({ cluster, distance: poseDistance(normalizedPose, cluster.prototype) }))
-        .sort((a, b) => a.distance - b.distance)
-        .slice(0, k)
-        .map(({ cluster, distance }) => ({
-            cluster,
-            distance,
-            similarity: Math.round(100 / (1 + distance))
-        }));
+
+    let bestPose = null, bestDist = Infinity;
+    for (let i = 0; i < poses.length; i++) {
+        const distance = poseDistance(normalizedPose, poses[i].keypoints);
+        if (distance < bestDist) {
+            bestDist = distance;
+            bestPose = poses[i];
+        }
+    }
+    if (!bestPose) return [];
+
+    const cluster = clusters.find(c => c.id === bestPose.cluster_id);
+    return [{
+        pose: bestPose,
+        cluster,
+        distance: bestDist,
+        similarity: Math.round(100 / (1 + bestDist))
+    }];
 }
 
-/** Null model from dataset (paper Section 3.2) — matches cluster_poses.py */
-const NULL_MALE = 0.4350;
-const NULL_FEMALE = 0.5246;
 
 /**
- * Find best-matching cluster for a pose.
- * k=1: use closest cluster's character (from multinomial test).
- * k>1: blend top k clusters by inverse-distance weight; classify via deviation from null
- *      (masculine if male_dev > female_dev and male_dev > 0; feminine analogously).
+ * Find the best-matching individual pose for a detected pose.
+ * Matches against the entire dataset of individual poses and returns
+ * the single closest pose and its parent cluster.
+ *
+ * @param {Array} poses      - The 15,000+ individual normalized poses
+ * @param {Array} clusters   - The 150 cluster objects
+ * @param {Object} keypoints - Raw keypoints {joint: {x, y}} (will be normalized)
+ * @returns {Object|null}    - {matchedPoses, cluster, character, malePercent, femalePercent, distance}
  */
-export function findClosestCluster(clusters, keypoints, k = 5) {
-    if (!clusters || !keypoints) return null;
+export function findClosestPoses(poses, clusters, keypoints) {
+    if (!poses || !clusters || !keypoints) return null;
     const normalizedPose = normalizeKeypoints(keypoints);
     if (!normalizedPose) return null;
 
-    const withDist = clusters
-        .filter(c => c.prototype)
-        .map(cluster => ({ cluster, distance: poseDistance(normalizedPose, cluster.prototype) }))
-        .sort((a, b) => a.distance - b.distance)
-        .slice(0, Math.max(1, k));
-
-    if (withDist.length === 0) return null;
-
-    if (k === 1) {
-        const c = withDist[0].cluster;
-        return {
-            cluster: c,
-            character: c.character || 'neutral',
-            malePercent: c.malePercent,
-            femalePercent: c.femalePercent,
-            distance: withDist[0].distance
-        };
+    let bestPose = null, bestDist = Infinity;
+    for (let i = 0; i < poses.length; i++) {
+        const distance = poseDistance(normalizedPose, poses[i].keypoints);
+        if (distance < bestDist) {
+            bestDist = distance;
+            bestPose = poses[i];
+        }
     }
+    if (!bestPose) return null;
 
-    const weights = withDist.map(({ distance }) => 1 / (1 + distance));
-    const sumW = weights.reduce((a, b) => a + b, 0);
-    const normWeights = weights.map(w => w / sumW);
-    let malePercent = 0, femalePercent = 0;
-    for (let i = 0; i < withDist.length; i++) {
-        malePercent += normWeights[i] * withDist[i].cluster.malePercent;
-        femalePercent += normWeights[i] * withDist[i].cluster.femalePercent;
-    }
-    // Paper-aligned: deviation from null, compare which gender is more over-represented
-    const maleDev = malePercent / 100 - NULL_MALE;
-    const femaleDev = femalePercent / 100 - NULL_FEMALE;
-    let character = 'neutral';
-    if (maleDev > femaleDev && maleDev > 0) character = 'masculine';
-    else if (femaleDev > maleDev && femaleDev > 0) character = 'feminine';
-
+    const c = clusters.find(cl => cl.id === bestPose.cluster_id);
     return {
-        cluster: withDist[0].cluster,
-        character,
-        malePercent,
-        femalePercent,
-        distance: withDist[0].distance
+        matchedPoses: [bestPose],
+        cluster: c,
+        character: c.character || 'neutral',
+        malePercent: c.malePercent,
+        femalePercent: c.femalePercent,
+        distance: bestDist
     };
 }
 
-/** Return hex color for character: masculine=blue, feminine=pink, neutral=green */
+/** Map cluster character to a display color (Catppuccin palette) */
 export function getGenderColor(cluster) {
     const cls = cluster?.character || 'neutral';
-    if (cls === 'masculine') return '#89b4fa';
-    if (cls === 'feminine') return '#f5c2e7';
-    return '#a6e3a1';
+    if (cls === 'masculine') return '#89b4fa';  // blue
+    if (cls === 'feminine') return '#f5c2e7';   // pink
+    return '#a6e3a1';                           // green
 }
 
-/** Draw a mini skeleton on canvas, scaled to fit; color by character */
+/**
+ * Draw a mini stick-figure skeleton on a canvas element.
+ * Used for cluster prototype thumbnails in the gallery/match cards.
+ * Auto-scales and centers the pose within the canvas bounding box.
+ */
 export function drawMiniSkeleton(canvas, pose, color = '#f9e2af') {
     if (!pose || !canvas) return;
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    // Compute bounding box of all joints to scale the skeleton to fit
     let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
     for (const name in pose) {
-        if (name === 'gender') continue;
+        if (name === 'gender') continue; // skip metadata field
         if (pose[name]?.x !== undefined) {
             xMin = Math.min(xMin, pose[name].x);
             xMax = Math.max(xMax, pose[name].x);
@@ -200,6 +243,7 @@ export function drawMiniSkeleton(canvas, pose, color = '#f9e2af') {
     const offsetX = (canvas.width - (xMin + xMax) * scale) / 2;
     const offsetY = (canvas.height - (yMin + yMax) * scale) / 2;
 
+    // Transform joint coordinates to canvas pixels
     const kp = {};
     for (const name in pose) {
         if (name === 'gender') continue;
@@ -208,6 +252,7 @@ export function drawMiniSkeleton(canvas, pose, color = '#f9e2af') {
         }
     }
 
+    // Draw bones (line segments)
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
     ctx.lineCap = 'round';
@@ -220,12 +265,75 @@ export function drawMiniSkeleton(canvas, pose, color = '#f9e2af') {
         }
     }
 
+    // Draw joints (small circles)
     ctx.fillStyle = color;
     for (const name in kp) {
         ctx.beginPath();
         ctx.arc(kp[name].x, kp[name].y, 2, 0, Math.PI * 2);
         ctx.fill();
     }
+}
+
+/**
+ * Parse the pose clusters CSV data.
+ * Reconstructs the cluster objects with prototype {joint: {x, y}} structure.
+ */
+export function parsePoseClustersCSV(csvText) {
+    const lines = csvText.trim().replace(/\r/g, '').split('\n');
+    const [headerLine, ...rows] = lines;
+    const headers = headerLine.split(',');
+
+    return rows.map(line => {
+        const values = line.split(',');
+        const row = Object.fromEntries(headers.map((h, i) => [h, values[i]]));
+
+        const cluster = {
+            id: +row.cluster_id,
+            character: row.character,
+            malePercent: +row.malePercent,
+            femalePercent: +row.femalePercent,
+            nonbinaryPercent: +row.nonbinaryPercent,
+            significant: row.significant === '1',
+            pValue: +row.pValue,
+            size: +row.size,
+            prototype: {}
+        };
+
+        KEYPOINT_NAMES.forEach(name => {
+            const x = +row[`x_${name}`], y = +row[`y_${name}`];
+            if (!isNaN(x)) cluster.prototype[name] = { x, y };
+        });
+
+        return cluster;
+    });
+}
+
+/**
+ * Parse the normalized poses CSV data.
+ */
+export function parseNormalizedPosesCSV(csvText) {
+    const lines = csvText.trim().replace(/\r/g, '').split('\n');
+    const [headerLine, ...rows] = lines;
+    const headers = headerLine.split(',');
+
+    return rows.map(line => {
+        const values = line.split(',');
+        const row = Object.fromEntries(headers.map((h, i) => [h, values[i]]));
+
+        const pose = {
+            id: +row.pose_id,
+            gender: row.gender,
+            cluster_id: +row.cluster_id,
+            keypoints: {}
+        };
+
+        KEYPOINT_NAMES.forEach(name => {
+            const x = +row[`x_${name}`], y = +row[`y_${name}`];
+            if (!isNaN(x)) pose.keypoints[name] = { x, y };
+        });
+
+        return pose;
+    });
 }
 
 /** Static HTML explaining the matching pipeline */
@@ -235,8 +343,8 @@ export function getHowItWorksHTML() {
             <h4>How pose matching works</h4>
             <ol>
                 <li><strong>Normalize</strong> — Your pose is scaled to a standard size (bounding box, unit length).</li>
-                <li><strong>Compare</strong> — We measure Euclidean distance to each of 150 pose categories (17 joints).</li>
-                <li><strong>Blend</strong> — Top k categories weighted by similarity. Closer = more influence.</li>
+                <li><strong>Compare</strong> — We measure Euclidean distance to each of the 15,000+ individual poses in the dataset (17 joints).</li>
+                <li><strong>Match</strong> — The detected pose is assigned to the parent cluster of the single nearest dataset pose.</li>
             </ol>
         </div>
     `;
