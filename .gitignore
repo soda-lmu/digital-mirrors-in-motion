@@ -35,10 +35,12 @@ ENV/
 Thumbs.db
 .env
 
-# Data files (generated/private)
-data/
-frontend/data/
-Unveiling_digital_mirrors.csv
+# Data files
+!data/
+data/output/
+!data/images/
+!data/videos/
+!data/*.csv
 Prototypes.zip
 Prototypes/
 

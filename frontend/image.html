@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <!-- Image Pose Analysis: upload image → MediaPipe pose detection → cluster matching -->
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,6 +9,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js"></script>
     <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
     <div class="app-container">
         <!-- Global Navigation -->
@@ -32,6 +34,10 @@
                     <button id="uploadBtn" class="btn btn-primary btn-large">📷 Upload Image</button>
                     <button id="clearBtn" class="btn" style="display: none;">🗑️ Clear</button>
                     <input type="file" id="imageInput" accept="image/*" hidden>
+                    
+                    <select id="exampleSelect" class="btn" style="display: none; background: var(--surface); color: var(--light); border: 1px solid var(--surface-light); margin-left: 10px;">
+                        <option value="">📷 Select from Examples</option>
+                    </select>
                 </div>
 
                 <div id="uploadPlaceholder" class="upload-placeholder">
@@ -57,9 +63,9 @@
                 </div>
 
                 <div class="card">
-                    <h2>🎯 Pose Pattern</h2>
+                    <h2>Pose Pattern</h2>
                     <div id="patternContent" class="pattern-content">
-                        <p class="placeholder-text">Upload an image to see pattern analysis</p>
+                        <p class="placeholder-text">Upload an image to see pose analysis</p>
                     </div>
                 </div>
             </div>
@@ -68,4 +74,5 @@
 
     <script type="module" src="image.js"></script>
 </body>
+
 </html>
