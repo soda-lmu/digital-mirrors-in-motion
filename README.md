@@ -1,4 +1,4 @@
-# Unveiling Digital Mirrors
+# Digital Mirrors in Motion
 
 Web tool and dataset for analyzing body-pose patterns and gendered pose signatures from short videos.
 

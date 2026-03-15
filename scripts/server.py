@@ -1,5 +1,5 @@
 """
-Local HTTP server for Unveiling Digital Mirrors.
+Local HTTP server for Digital Mirrors in Motion.
 Serves frontend/ (HTML, JS, CSS, data/) on http://localhost:8000.
 
 Usage:
@@ -36,7 +36,7 @@ if __name__ == "__main__":
     os.chdir(ROOT_DIRECTORY)
     
     with socketserver.TCPServer(("", PORT), Handler) as httpd:
-        print(f"Unveiling Digital Mirrors - Pose Analysis Tool")
+        print(f"Digital Mirrors in Motion - Pose Analysis Tool")
         print(f"=" * 50)
         print(f"Server running at: http://localhost:{PORT}/frontend/index.html")
         print(f"Press Ctrl+C to stop")
