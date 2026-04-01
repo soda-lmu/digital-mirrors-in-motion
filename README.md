@@ -2,6 +2,15 @@
 
 Web tool and dataset for analyzing body-pose patterns and gendered pose signatures from short videos.
 
+## Video Explaining the Tool and Setup
+
+Watch the full setup and a demonstration of the interface, including image and video analysis:
+
+*(Click the image above to watch the video on YouTube)*
+
+[![Digital Mirrors in Motion Demo](https://img.youtube.com/vi/sDeKJPJI14Y/0.jpg)](https://youtu.be/sDeKJPJI14Y)
+
+
 ## Quick Start
 
 This project uses `uv` to ensure consistent execution.
